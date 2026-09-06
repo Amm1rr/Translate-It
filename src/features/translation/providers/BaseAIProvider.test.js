@@ -2078,5 +2078,86 @@ beforeEach(() => {
         activeSpy.mockRestore();
       }
     });
+
+    it('returns OJH-owned results without intermediate AIStreamManager publication', async () => {
+      const engine = {};
+      const streamSpy = vi.spyOn(AIStreamManager, 'streamBatchResults').mockResolvedValue(undefined);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+      const batchingSpy = vi.spyOn(provider, 'getBatchingConfig').mockResolvedValue({
+        strategy: 'single',
+        characterLimit: 5000,
+      });
+      const batchSpy = vi.spyOn(provider, '_translateBatch').mockResolvedValue(['private-result']);
+
+      try {
+        const result = await provider._streamingBatchTranslate(
+          ['source'],
+          'en',
+          'fa',
+          'selection',
+          engine,
+          'msg-ojh-owner',
+          null,
+          null,
+          null,
+          ResponseFormat.JSON_OBJECT,
+          { executionContext: { resultPublicationOwner: 'optimized-json-handler' } },
+        );
+
+        expect(result).toEqual(['private-result']);
+        expect(batchSpy).toHaveBeenCalledTimes(1);
+        expect(streamSpy).not.toHaveBeenCalled();
+      } finally {
+        streamSpy.mockRestore();
+        activeSpy.mockRestore();
+        batchingSpy.mockRestore();
+        batchSpy.mockRestore();
+      }
+    });
+
+    it('publishes provider-owned streaming results through AIStreamManager', async () => {
+      const engine = {};
+      const streamSpy = vi.spyOn(AIStreamManager, 'streamBatchResults').mockResolvedValue(undefined);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+      const batchingSpy = vi.spyOn(provider, 'getBatchingConfig').mockResolvedValue({
+        strategy: 'single',
+        characterLimit: 5000,
+      });
+      const batchSpy = vi.spyOn(provider, '_translateBatch').mockResolvedValue(['provider-result']);
+
+      try {
+        const result = await provider._streamingBatchTranslate(
+          ['source'],
+          'en',
+          'fa',
+          'selection',
+          engine,
+          'msg-provider-owner',
+          null,
+          null,
+          null,
+          ResponseFormat.JSON_OBJECT,
+          {},
+        );
+
+        expect(result).toEqual(['provider-result']);
+        expect(batchSpy).toHaveBeenCalledTimes(1);
+        expect(streamSpy).toHaveBeenCalledWith(
+          'MockAI',
+          ['provider-result'],
+          ['source'],
+          0,
+          'msg-provider-owner',
+          engine,
+          'en',
+          'fa',
+        );
+      } finally {
+        streamSpy.mockRestore();
+        activeSpy.mockRestore();
+        batchingSpy.mockRestore();
+        batchSpy.mockRestore();
+      }
+    });
   });
 });

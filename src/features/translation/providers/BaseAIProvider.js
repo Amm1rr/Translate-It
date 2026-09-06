@@ -31,6 +31,7 @@ import { TranslationContractValidator } from "@/features/translation/core/Transl
 
 const logger = getScopedLogger(LOG_COMPONENTS.TRANSLATION, 'BaseAIProvider');
 const MAX_SCALAR_SELECTIVE_RECOVERY_UNITS = 3;
+const OJH_RESULT_PUBLICATION_OWNER = 'optimized-json-handler';
 
 function createConversationCommitCandidate(translateMode) {
   let staged = null;
@@ -1028,7 +1029,8 @@ export class BaseAIProvider extends BaseProvider {
 
   /**
    * Streaming batch translation implementation
-   * Sends segments in multiple batches for real-time updates
+   * Sends segments in multiple batches for real-time updates. Intermediate
+   * publication is skipped when OJH owns canonical structured publication.
    * @protected
    */
   async _streamingBatchTranslate(texts, sourceLang, targetLang, translateMode, engine, messageId, abortController, priority, sessionId, expectedFormat, options = {}) {
@@ -1109,8 +1111,9 @@ export class BaseAIProvider extends BaseProvider {
         const batchResults = Array.isArray(batchResponse) ? batchResponse : [batchResponse];
         allResults.push(...batchResults);
 
-        // Stream batch results to content script
-        if (engine && messageId) {
+        // OJH publishes mapped structured results through its canonical path.
+        if (engine && messageId
+            && options.executionContext?.resultPublicationOwner !== OJH_RESULT_PUBLICATION_OWNER) {
           await AIStreamManager.streamBatchResults(
             this.providerName,
             batchResults,
