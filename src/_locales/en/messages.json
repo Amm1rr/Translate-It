@@ -1137,7 +1137,25 @@
     "message": "Model"
   },
   "deepseek_api_model_placeholder": {
-    "message": "Enter DeepSeek model (e.g., deepseek-chat)"
+    "message": "Enter DeepSeek model (e.g., deepseek-v4-flash)"
+  },
+  "deepseek_thinking_mode_label": {
+    "message": "Thinking Mode"
+  },
+  "deepseek_thinking_mode_disabled": {
+    "message": "Disabled"
+  },
+  "deepseek_thinking_mode_low": {
+    "message": "Low"
+  },
+  "deepseek_thinking_mode_high": {
+    "message": "High"
+  },
+  "deepseek_thinking_mode_max": {
+    "message": "Max"
+  },
+  "deepseek_thinking_mode_description": {
+    "message": "Controls how much reasoning DeepSeek uses."
   },
   "deepl_api_settings_title": {
     "message": "DeepL API Settings"

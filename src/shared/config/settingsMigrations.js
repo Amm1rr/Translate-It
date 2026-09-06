@@ -36,7 +36,7 @@ const MODEL_VALUE_MIGRATIONS = {
   },
   DEEPSEEK_MODELS: {
     'deepseek-chat': 'deepseek-v4-flash',
-    'deepseek-reasoner': 'deepseek-v4-pro'
+    'deepseek-reasoner': 'deepseek-v4-flash'
   },
   GEMINI_MODELS: {
     'gemini-3.1-flash-lite-preview': 'gemini-3.5-flash-lite',
@@ -47,6 +47,11 @@ const MODEL_VALUE_MIGRATIONS = {
     'gemini-2.5-flash': 'gemini-3.5-flash',
     'gemini-2.5-flash-lite': 'gemini-3.5-flash-lite'
   }
+};
+
+const DEEPSEEK_THINKING_MODE_MIGRATIONS = {
+  'deepseek-chat': 'disabled',
+  'deepseek-reasoner': 'high'
 };
 
 const OBSOLETE_MICROSOFT_EDGE_SETTING_KEYS = [
@@ -315,6 +320,13 @@ function runMainMigration(currentSettings) {
     migrationLog.push(`Migrated GEMINI_THINKING_MODE to ${migratedThinkingMode}`);
   }
 
+  const deepseekThinkingMode = currentSettings.DEEPSEEK_THINKING_MODE;
+  const supportedDeepSeekThinkingModes = CONFIG.DEEPSEEK_THINKING_MODE_OPTIONS.map(option => option.value);
+  if (!supportedDeepSeekThinkingModes.includes(deepseekThinkingMode)) {
+    updates.DEEPSEEK_THINKING_MODE = CONFIG.DEEPSEEK_THINKING_MODE;
+    migrationLog.push(`Migrated DEEPSEEK_THINKING_MODE to ${CONFIG.DEEPSEEK_THINKING_MODE}`);
+  }
+
   // A2. Legacy storage cleanup: non-editable prompt wrappers were persisted by
   // older versions. Remove leftover copies so storage no longer carries them.
   const removals = currentSettings
@@ -334,19 +346,31 @@ function runMainMigration(currentSettings) {
 
   // B. Handle model lists - Dynamic update & reset if model removed
   Object.entries(MODEL_MAPPING).forEach(([modelListKey, currentModelKey]) => {
-    if (!(modelListKey in currentSettings)) return;
-
+    const hasStoredModelList = modelListKey in currentSettings;
     const currentUserModel = currentSettings[currentModelKey];
+    const isLegacyDeepSeekModelWithoutList = modelListKey === 'DEEPSEEK_MODELS'
+      && Object.prototype.hasOwnProperty.call(MODEL_VALUE_MIGRATIONS[modelListKey], currentUserModel);
+    if (!hasStoredModelList && !isLegacyDeepSeekModelWithoutList) return;
+
     const newModels = CONFIG[modelListKey];
     const modelIsActive = newModels.some(model => model.value === currentUserModel);
     const explicitReplacement = modelIsActive
       ? undefined
       : MODEL_VALUE_MIGRATIONS[modelListKey]?.[currentUserModel];
-    const modelListChanged = JSON.stringify(currentSettings[modelListKey]) !== JSON.stringify(newModels);
+    const modelListChanged = hasStoredModelList
+      && JSON.stringify(currentSettings[modelListKey]) !== JSON.stringify(newModels);
 
     if (explicitReplacement) {
       updates[currentModelKey] = explicitReplacement;
       migrationLog.push(`Migrated ${currentModelKey} from ${currentUserModel} to ${explicitReplacement}`);
+
+      const migratedThinkingMode = modelListKey === 'DEEPSEEK_MODELS'
+        ? DEEPSEEK_THINKING_MODE_MIGRATIONS[currentUserModel]
+        : undefined;
+      if (migratedThinkingMode) {
+        updates.DEEPSEEK_THINKING_MODE = migratedThinkingMode;
+        migrationLog.push(`Migrated DEEPSEEK_THINKING_MODE to ${migratedThinkingMode}`);
+      }
     }
 
     if (modelListChanged) {

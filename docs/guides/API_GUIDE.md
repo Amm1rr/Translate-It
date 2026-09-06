@@ -38,7 +38,7 @@ You can customize each provider's settings to balance quality and cost:
 - **Google Gemini:** Change the `API URL` to use different models (e.g., `gemini-2.0-flash`).
 - **OpenAI:** Enter specific model names like `gpt-4o` or `gpt-3.5-turbo`.
 - **OpenRouter:** Support for a variety of models; use the model name from the [OpenRouter Docs](https://openrouter.ai/models).
-- **DeepSeek:** Customize model settings as per [DeepSeek Docs](https://api-docs.deepseek.com/api/list-models/).
+- **DeepSeek:** Customize model settings as per [DeepSeek Docs](https://api-docs.deepseek.com/api/list-models/); optionally set a thinking level.
 - **DeepL:** Configure API tier (Free or Pro) and formality settings.
 - **Custom (OpenAI Compatible):** Connect to self-hosted models (e.g., **Ollama**) or any third-party OpenAI-compatible API by providing a custom `API URL` and `Model Name`.
 
@@ -49,4 +49,4 @@ You can customize each provider's settings to balance quality and cost:
 If you don't specify a model, these are the defaults used:
 - **OpenAI / OpenRouter:** `gpt-3.5-turbo`
 - **Google Gemini / WebAI to API:** `gemini-1.5-flash`
-- **DeepSeek:** `deepseek-chat`
+- **DeepSeek:** `deepseek-v4-flash`
