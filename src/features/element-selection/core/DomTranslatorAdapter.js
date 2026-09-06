@@ -1213,12 +1213,9 @@ export class DomTranslatorAdapter extends ResourceTracker {
   }
 
   _logRejectedMapping(index, identity, reason) {
-    this.logger.warn('[DomTranslatorAdapter] Rejected translation result mapping', {
-      reason,
-      resultIndex: index,
-      identityPresent: Boolean(identity),
-      identityKnown: reason !== 'unknown',
-    });
+    this.logger.warn(
+      `[DomTranslatorAdapter] Rejected translation result mapping: reason=${reason}, resultIndex=${index}, identityPresent=${Boolean(identity)}, identityKnown=${reason !== 'unknown'}`
+    );
   }
 
   _getResultContent(item) {
