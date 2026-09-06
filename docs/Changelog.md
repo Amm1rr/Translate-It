@@ -1,4 +1,4 @@
-#### v1.19.0 – Released on September 05, 2026
+#### v1.19.0 – Released on September 06, 2026
 
 ##### Added
 
