@@ -5,8 +5,20 @@ function requireString(value, field) {
   return value
 }
 
+function requireParentIdentity(value, field) {
+  if (typeof value === 'string') {
+    if (value.length === 0) throw new TypeError(`ConversationAcceptanceHandoff requires ${field}`)
+    return value
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError(`ConversationAcceptanceHandoff requires ${field}`)
+    return value
+  }
+  throw new TypeError(`ConversationAcceptanceHandoff requires ${field}`)
+}
+
 function normalizeParent(parent, index) {
-  const parentId = requireString(parent?.parentId, `parents[${index}].parentId`)
+  const parentId = requireParentIdentity(parent?.parentId, `parents[${index}].parentId`)
   if (!Number.isInteger(parent?.sourceOrder) || parent.sourceOrder < 0) {
     throw new TypeError(`ConversationAcceptanceHandoff requires parents[${index}].sourceOrder`)
   }

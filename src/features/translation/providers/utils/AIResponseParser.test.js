@@ -217,6 +217,19 @@ describe('AIResponseParser', () => {
       expect(result).toEqual({ results: ['AA', 'BB'], contractViolation: false });
     });
 
+    it('maps unique fragment wire IDs without replacing logical unit IDs', () => {
+      const result = AIResponseParser.parseBatchResult(
+        '[{"id":"n1::fragment:1","text":"second"},{"id":"n1::fragment:0","text":"first"}]',
+        2,
+        [
+          { i: 'n1', wireId: 'n1::fragment:0', t: 'A' },
+          { i: 'n1', wireId: 'n1::fragment:1', t: 'B' },
+        ],
+      );
+
+      expect(result).toEqual({ results: ['first', 'second'], contractViolation: false });
+    });
+
     it.each([
       ['unknown ID', '[{"id":"9","text":"AA"},{"id":"1","text":"BB"}]'],
       ['duplicate ID', '[{"id":"0","text":"AA"},{"id":"0","text":"BB"}]'],

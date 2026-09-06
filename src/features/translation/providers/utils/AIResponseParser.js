@@ -55,7 +55,7 @@ function getSourceText(source) {
 }
 
 function getObjectIdentity(item) {
-  return item?.i ?? item?.uid ?? item?.id
+  return item?.wireId ?? item?.i ?? item?.uid ?? item?.id
 }
 
 function isBlankText(value) {

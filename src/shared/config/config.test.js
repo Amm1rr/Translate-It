@@ -218,12 +218,20 @@ describe('Config Module', () => {
       ]);
     });
 
-    it.each(['PROMPT_BASE_AI_BATCH', 'PROMPT_BASE_AI_BATCH_AUTO'])(
-      '%s documents the runtime segment marker protocol',
+    it.each(['PROMPT_BASE_AI_BATCH', 'PROMPT_BASE_AI_BATCH_AUTO', 'PROMPT_BASE_AI_FOLLOWUP', 'PROMPT_BASE_AI_FOLLOWUP_AUTO'])(
+      '%s reserves runtime marker protocol instructions',
       (key) => {
-        expect(CONFIG[key]).toContain('@@TI_SEG_');
-        expect(CONFIG[key]).toContain('@@TI_SEG_xxx_session_n5@@');
+        expect(CONFIG[key]).toContain('$_{MARKER_PRESERVATION_INSTRUCTIONS}');
         expect(CONFIG[key]).not.toContain('[--SEG:nN--]');
+      }
+    );
+
+    it.each(['PROMPT_BASE_AI_FOLLOWUP', 'PROMPT_BASE_AI_FOLLOWUP_AUTO'])(
+      '%s keeps newline transport markers unconditionally',
+      (key) => {
+        expect(CONFIG[key]).toContain('<n1/>');
+        expect(CONFIG[key]).toContain('<n2/>');
+        expect(CONFIG[key]).toContain('If you see markers like <n1/> or <n2/>');
       }
     );
   });

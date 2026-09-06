@@ -32,6 +32,13 @@ describe('PromptRegistry', () => {
     expect(screenCapturePlaceholders).toContain('$_{PROMPT_INSTRUCTIONS}');
   });
 
+  it('exposes marker preservation placeholder for all AI batch and follow-up prompts', () => {
+    for (const key of ['PROMPT_BASE_AI_BATCH', 'PROMPT_BASE_AI_BATCH_AUTO', 'PROMPT_BASE_AI_FOLLOWUP', 'PROMPT_BASE_AI_FOLLOWUP_AUTO']) {
+      expect(getRequiredPlaceholders(key)).toContain('$_{MARKER_PRESERVATION_INSTRUCTIONS}');
+      expect(PROMPT_REGISTRY[key].placeholders).toContain('$_{MARKER_PRESERVATION_INSTRUCTIONS}');
+    }
+  });
+
   it('correctly identifies editable prompts', () => {
     expect(isPromptEditable('PROMPT_TEMPLATE')).toBe(true);
     expect(isPromptEditable('PROMPT_BASE_AI_BATCH')).toBe(false);

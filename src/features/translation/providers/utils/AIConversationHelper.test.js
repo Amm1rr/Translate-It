@@ -367,6 +367,126 @@ describe('AIConversationHelper', () => {
     });
   });
 
+  it('exposes grouped unit context without provider-side reconstruction markers', async () => {
+    const { getPromptAsync, getPromptBASEAIBatchAsync } = await import('@/shared/config/config.js');
+    getPromptAsync.mockResolvedValue('INSTRUCTIONS: $_{SOURCE} $_{TARGET}');
+    getPromptBASEAIBatchAsync.mockResolvedValue('BATCH: $_{PROMPT_INSTRUCTIONS}\n$_{MARKER_PRESERVATION_INSTRUCTIONS}\n$_{TEXT}');
+
+    const { systemPrompt, userText } = await AIConversationHelper.preparePromptAndText(
+      [
+        { i: 'n1', t: 'The', group: 'g1', part: 0 },
+        { i: 'n2', t: 'final season', group: 'g1', part: 1 },
+      ],
+      'en',
+      'fa',
+      'select-element',
+      'ai',
+    );
+
+    expect(JSON.parse(userText)).toEqual({
+      translations: [
+        { id: 'n1', group: 'g1', part: 0, text: 'The' },
+        { id: 'n2', group: 'g1', part: 1, text: 'final season' },
+      ],
+    });
+    expect(userText).not.toContain('@@TI_SEG_');
+    expect(systemPrompt).toContain('Items with the same "group" belong to one logical text');
+    expect(systemPrompt).toContain('Return only each item\'s "id" and translated "text".');
+    expect(systemPrompt).not.toContain('@@TI_SEG_');
+
+    const legacy = await AIConversationHelper.preparePromptAndText(
+      [{ i: 'g1', t: 'A@@ TI _ SEG _ entropy_session_n2@@B' }],
+      'en',
+      'fa',
+      'select-element',
+      'ai',
+    );
+    expect(legacy.systemPrompt).toContain('Preserve every segment marker that begins with @@TI_SEG_');
+
+    const fragment = await AIConversationHelper.preparePromptAndText(
+      [{ i: 'n1', wireId: 'n1::fragment:0', t: 'The', group: 'g1', part: 0 }],
+      'en',
+      'fa',
+      'select-element',
+      'ai',
+    );
+    expect(JSON.parse(fragment.userText).translations[0].id).toBe('n1::fragment:0');
+  });
+
+  it('gates marker instructions for first-turn and follow-up history paths', async () => {
+    const { getPromptAsync, getPromptBASEAIBatchAsync, getPromptBASEAIBatchAutoAsync, getPromptBASEAIFollowupAsync, getPromptBASEAIFollowupAutoAsync, getAIConversationHistoryEnabledAsync } = await import('@/shared/config/config.js');
+    getPromptAsync.mockResolvedValue('INSTRUCTIONS: $_{SOURCE} $_{TARGET}');
+    getPromptBASEAIBatchAsync.mockResolvedValue('BATCH: $_{PROMPT_INSTRUCTIONS}\n$_{MARKER_PRESERVATION_INSTRUCTIONS}\n$_{TEXT}');
+    getPromptBASEAIBatchAutoAsync.mockResolvedValue('BATCH_AUTO: $_{PROMPT_INSTRUCTIONS}\n$_{MARKER_PRESERVATION_INSTRUCTIONS}\n$_{TEXT}');
+    getPromptBASEAIFollowupAsync.mockResolvedValue('FOLLOWUP: $_{PROMPT_INSTRUCTIONS}\n  - If you see markers like <n1/> or <n2/>, treat them as literal line break markers and preserve them exactly in their correct positions.\n$_{MARKER_PRESERVATION_INSTRUCTIONS}\n$_{TEXT}');
+    getPromptBASEAIFollowupAutoAsync.mockResolvedValue('FOLLOWUP_AUTO: $_{PROMPT_INSTRUCTIONS}\n  - If you see markers like <n1/> or <n2/>, treat them as literal line break markers and preserve them exactly in their correct positions.\n$_{MARKER_PRESERVATION_INSTRUCTIONS}\n$_{TEXT}');
+    getAIConversationHistoryEnabledAsync.mockResolvedValue(true);
+
+    const newlineInstruction = 'If you see markers like <n1/> or <n2/>, treat them as literal line break markers';
+
+    const groupedFirstTurn = await AIConversationHelper.preparePromptAndText(
+      [
+        { i: 'n1', t: 'The', group: 'g1', part: 0 },
+        { i: 'n2', t: 'final season', group: 'g1', part: 1 },
+      ],
+      'en',
+      'fa',
+      'select-element',
+      'ai',
+      'first-turn-session'
+    );
+    expect(groupedFirstTurn.systemPrompt).not.toContain('@@TI_SEG_');
+    expect(groupedFirstTurn.systemPrompt).toContain('Items with the same "group"');
+
+    const session = translationSessionManager.getOrCreateSession('followup-session', 'OpenAI');
+    session.history.push({ role: 'user', content: 'prev source' }, { role: 'assistant', content: 'prev translated' });
+    session.turnCounter = 1;
+
+    const groupedFollowup = await AIConversationHelper.preparePromptAndText(
+      [
+        { i: 'n1', t: 'The', group: 'g1', part: 0 },
+        { i: 'n2', t: 'final season', group: 'g1', part: 1 },
+      ],
+      'en',
+      'fa',
+      'select-element',
+      'ai',
+      'followup-session'
+    );
+    expect(groupedFollowup.systemPrompt).toContain('FOLLOWUP:');
+    expect(groupedFollowup.systemPrompt).toContain(newlineInstruction);
+    expect(groupedFollowup.systemPrompt).not.toContain('@@TI_SEG_');
+    expect(groupedFollowup.systemPrompt).toContain('Items with the same "group"');
+
+    const legacyFollowup = await AIConversationHelper.preparePromptAndText(
+      [{ i: 'g1', t: 'A@@TI_SEG_entropy_session_n2@@B' }],
+      'en',
+      'fa',
+      'select-element',
+      'ai',
+      'followup-session'
+    );
+    expect(legacyFollowup.systemPrompt).toContain('FOLLOWUP:');
+    expect(legacyFollowup.systemPrompt).toContain(newlineInstruction);
+    expect(legacyFollowup.systemPrompt).toContain('Preserve every segment marker that begins with @@TI_SEG_');
+
+    const { shouldUseAutoPromptAsync } = await import('@/features/translation/utils/bilingualPromptHelper.js');
+    shouldUseAutoPromptAsync.mockResolvedValueOnce(true);
+    const legacyAutoFollowup = await AIConversationHelper.preparePromptAndText(
+      [{ i: 'g1', t: 'A@@TI_ESC_xxx@@B' }],
+      'auto',
+      'fa',
+      'select-element',
+      'ai',
+      'followup-session'
+    );
+    expect(legacyAutoFollowup.systemPrompt).toContain('FOLLOWUP_AUTO:');
+    expect(legacyAutoFollowup.systemPrompt).toContain(newlineInstruction);
+    expect(legacyAutoFollowup.systemPrompt).toContain('Preserve every segment marker that begins with @@TI_SEG_');
+
+    getAIConversationHistoryEnabledAsync.mockResolvedValue(false);
+  });
+
   it('correctly assembles subtitle prompt with base, user, and batch instructions', async () => {
     const metadata = {
       promptTemplate: 'BASE: $_{PROMPT_INSTRUCTIONS}\nFORMAT: $_{BATCH_INSTRUCTION}\nTEXT: $_{TEXT}',

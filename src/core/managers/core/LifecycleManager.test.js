@@ -56,6 +56,47 @@ describe('LifecycleManager translation text routing', () => {
   })
 })
 
+describe('LifecycleManager legacy Select Element handler removal', () => {
+  const LAZY_SELECT_ELEMENT_HANDLERS = [
+    'handleActivateSelectElementModeLazy',
+    'handleDeactivateSelectElementModeLazy',
+    'handleSetSelectElementStateLazy',
+    'handleGetSelectElementStateLazy',
+    'handleIframeSelectElementFinishedLazy',
+    'handleSelectElementFrameReadyLazy'
+  ]
+
+  beforeEach(() => {
+    registeredHandlers.clear()
+    registerHandlerMock.mockClear()
+  })
+
+  it('no longer exports the legacy handleSelectElement while keeping lazy routing', async () => {
+    const Handlers = await import('@/core/background/handlers/index.js')
+
+    expect('handleSelectElement' in Handlers).toBe(false)
+    for (const name of LAZY_SELECT_ELEMENT_HANDLERS) {
+      expect(Handlers[name]).toEqual(expect.any(Function))
+    }
+  })
+
+  it('registration leaves no unmapped legacy handleSelectElement warning source', async () => {
+    const Handlers = await import('@/core/background/handlers/index.js')
+    const manager = new LifecycleManager()
+    manager.registerMessageHandlers()
+
+    const mappedHandlers = new Set(registerHandlerMock.mock.calls.map(([, handler]) => handler))
+    const unmappedNames = Object.entries(Handlers)
+      .filter(([, value]) => typeof value === 'function' && !mappedHandlers.has(value))
+      .map(([name]) => name)
+
+    expect(unmappedNames).not.toContain('handleSelectElement')
+    for (const name of LAZY_SELECT_ELEMENT_HANDLERS) {
+      expect(mappedHandlers.has(Handlers[name])).toBe(true)
+    }
+  })
+})
+
 describe('LifecycleManager context menu refresh failures', () => {
   it('propagates context menu refresh failure after emergency fallback', async () => {
     const manager = new LifecycleManager()

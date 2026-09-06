@@ -44,6 +44,24 @@ describe('ConversationAcceptanceHandoff', () => {
       { parentId: 'g2', sourceOrder: 0, cleanSource: 'y' },
     ])).toThrow()
   })
+
+  it('preserves a valid falsy parent identity', () => {
+    const handoff = createHandoff([{ parentId: 0, sourceOrder: 0, cleanSource: 'source' }])
+
+    expect(handoff.parents[0].parentId).toBe(0)
+    expect(new ConversationAcceptanceHandle(handoff).acceptParent(0, 'translated'))
+      .toBe(AcceptanceResult.ACCEPTED)
+  })
+
+  it('rejects non-string/non-finite parent identities', () => {
+    const invalidIds = [null, undefined, '', false, true, {}, [], NaN, Infinity, -Infinity]
+    for (const invalidId of invalidIds) {
+      expect(() => createHandoff([{ parentId: invalidId, sourceOrder: 0, cleanSource: 'x' }])).toThrow()
+    }
+    expect(() => createHandoff([{ parentId: 'valid', sourceOrder: 0, cleanSource: 'x' }])).not.toThrow()
+    expect(() => createHandoff([{ parentId: 42, sourceOrder: 0, cleanSource: 'x' }])).not.toThrow()
+    expect(() => createHandoff([{ parentId: 0, sourceOrder: 0, cleanSource: 'x' }])).not.toThrow()
+  })
 })
 
 describe('ConversationAcceptanceHandle', () => {

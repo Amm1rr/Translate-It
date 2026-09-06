@@ -88,7 +88,7 @@ export const PROMPT_REGISTRY = {
     category: PromptCategory.SYSTEM,
     risk: PromptRisk.CRITICAL,
     editable: false,
-    placeholders: ["$_{SOURCE}", "$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{COUNT}", "$_{TEXT}"],
+    placeholders: ["$_{SOURCE}", "$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{COUNT}", "$_{MARKER_PRESERVATION_INSTRUCTIONS}", "$_{TEXT}"],
     previewSupport: false
   },
   PROMPT_BASE_AI_BATCH_AUTO: {
@@ -97,7 +97,7 @@ export const PROMPT_REGISTRY = {
     category: PromptCategory.SYSTEM,
     risk: PromptRisk.CRITICAL,
     editable: false,
-    placeholders: ["$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{COUNT}", "$_{TEXT}"],
+    placeholders: ["$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{COUNT}", "$_{MARKER_PRESERVATION_INSTRUCTIONS}", "$_{TEXT}"],
     previewSupport: false
   },
   PROMPT_BASE_SELECT: {
@@ -169,7 +169,7 @@ export const PROMPT_REGISTRY = {
     category: PromptCategory.INTERNAL,
     risk: PromptRisk.CRITICAL,
     editable: false,
-    placeholders: ["$_{SOURCE}", "$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{TEXT}"],
+    placeholders: ["$_{SOURCE}", "$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{MARKER_PRESERVATION_INSTRUCTIONS}", "$_{TEXT}"],
     previewSupport: false
   },
   PROMPT_BASE_AI_FOLLOWUP_AUTO: {
@@ -178,7 +178,7 @@ export const PROMPT_REGISTRY = {
     category: PromptCategory.INTERNAL,
     risk: PromptRisk.CRITICAL,
     editable: false,
-    placeholders: ["$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{TEXT}"],
+    placeholders: ["$_{TARGET}", "$_{PROMPT_INSTRUCTIONS}", "$_{MARKER_PRESERVATION_INSTRUCTIONS}", "$_{TEXT}"],
     previewSupport: false
   }
 };

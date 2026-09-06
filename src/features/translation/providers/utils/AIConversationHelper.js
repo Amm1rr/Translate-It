@@ -26,6 +26,10 @@ import { TranslationCallPurpose } from '../ProviderConstants.js';
 
 const logger = getScopedLogger(LOG_COMPONENTS.TRANSLATION, 'AIConversationHelper');
 
+const MARKER_PRESERVATION_INSTRUCTIONS = `- Preserve every segment marker that begins with @@TI_SEG_ and ends with @@ exactly as it appears. Example: @@TI_SEG_xxx_session_n5@@. Do not translate, remove, duplicate, reorder, or modify any character inside these markers.
+- Each segment marker is one complete boundary token, not an opening/closing pair. Do not add extra @@ around translated text.
+- Preserve every @@TI_ESC_...@@ escape token exactly as it appears. Do not translate, remove, or modify it.`;
+
 function hasCommittedConversationPair(session) {
   const history = session?.history;
   if (!Array.isArray(history)) return false;
@@ -293,6 +297,17 @@ export const AIConversationHelper = {
     const metadata = contextMetadata?.contextMetadata 
       ? { ...contextMetadata, ...contextMetadata.contextMetadata } 
       : contextMetadata;
+    const textsArray = Array.isArray(text) ? text : [text];
+    const hasGroupedUnits = textsArray.some((item) => (
+      item
+      && typeof item === 'object'
+      && item.group !== null
+      && item.group !== undefined
+      && Number.isInteger(item.part)
+    ));
+    const hasMarkerTokens = textsArray.some((item) => /@@\s*TI\s*_\s*(?:SEG|ESC)\s*_[\s\S]*?@@/i.test(
+      typeof item === 'object' && item !== null ? (item.t ?? item.text ?? '') : String(item ?? '')
+    ));
 
     const { getLanguageNameFromCode, getCanonicalCode } = await import('@/shared/config/languageConstants.js');
     const { getSourceLanguageAsync } = await import('@/shared/config/config.js');
@@ -398,6 +413,10 @@ export const AIConversationHelper = {
       promptInstructions += '\n\nTranslate every input item, including very short items; preserve each input id.';
     }
 
+    if (hasGroupedUnits) {
+      promptInstructions += '\n\nItems with the same "group" belong to one logical text and are ordered by "part". Use adjacent items as translation context. Return exactly one translated item for every input "id". Do not merge, split, omit, duplicate, or reorder IDs. Return only each item\'s "id" and translated "text".';
+    }
+
     // Append semantic translation context when available (PDF mode only)
     if (translateMode === TranslationMode.PDF && metadata?.semanticHint) {
       const semanticInstructions = buildSemanticInstructions(metadata.semanticHint)
@@ -406,10 +425,9 @@ export const AIConversationHelper = {
       }
     }
 
-    const textsArray = Array.isArray(text) ? text : [text];
     const textsCount = textsArray.length;
 
-    // Use project standard placeholders: $_{SOURCE}, $_{TARGET}, $_{TEXT}, $_{PROMPT_INSTRUCTIONS} with global regex
+    // Use project standard placeholders, including marker rules only when input contains markers.
     let systemPrompt;
     if (shouldUseBatchPrompt) {
       // For batch prompts, we need to inject instructions and verify $_{TEXT} exists
@@ -435,6 +453,7 @@ export const AIConversationHelper = {
         .replace(/\$_{SOURCE}/g, sourceName)
         .replace(/\$_{TARGET}/g, targetName)
         .replace(/\$_{PROMPT_INSTRUCTIONS}/g, promptInstructions)
+        .replace(/\$_{MARKER_PRESERVATION_INSTRUCTIONS}/g, hasMarkerTokens ? MARKER_PRESERVATION_INSTRUCTIONS : '')
         .replace(/\$_{BATCH_INSTRUCTION}/g, processedBatchInstruction)
         .replace(/\$_{COUNT}/g, String(textsCount));
     } else {
@@ -460,7 +479,9 @@ export const AIConversationHelper = {
             const originalText = t.t || t.text || '';
             const protectedText = NewlineManager.protect(originalText);
             return {
-              id: String(t.i ?? t.id ?? idx),
+              id: String(t.wireId ?? t.i ?? t.id ?? idx),
+              ...(t.group !== null && t.group !== undefined && { group: t.group }),
+              ...(Number.isInteger(t.part) && { part: t.part }),
               text: protectedText,
               // Include per-cue context if available (critical for Subtitles)
               ...(t.context && { context: t.context })

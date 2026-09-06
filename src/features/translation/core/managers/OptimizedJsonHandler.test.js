@@ -1990,6 +1990,111 @@ describe('OptimizedJsonHandler', () => {
       expect(mockProvider.translate.mock.calls[1][1]).toBe('fr');
     });
 
+    it('preserves grouped Select Element units and resolves parent ownership from b', async () => {
+      const payload = [
+        { t: 'The', i: 'n1', b: 0, group: 0, part: 0 },
+        { t: 'final season', i: 'n2', b: 0, group: 0, part: 1 },
+      ];
+      mockEngine.createIntelligentBatches = vi.fn(() => [payload]);
+      mockProvider.translate.mockResolvedValueOnce({
+        translatedText: [
+          { id: 'n1', text: 'The translated' },
+          { id: 'n2', text: 'final translated' },
+        ],
+      });
+      const executionContext = {
+        operation: {
+          getParentCandidate: vi.fn((parentId) => parentId === 0 ? {} : null),
+        },
+      };
+
+      const result = await handler.execute(
+        mockEngine,
+        { ...mockData, text: JSON.stringify(payload), sourceLanguage: 'en' },
+        mockProvider,
+        'en',
+        'fa',
+        'grouped-units-b-alias',
+        mockSender,
+        'unknown',
+        executionContext,
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockProvider.translate.mock.calls[0][0]).toEqual(payload);
+      expect(mockProvider.translate.mock.calls[0][3].contextMetadata).toMatchObject({
+        preserveBatchUnitObjects: true,
+        useParentConversationLifecycle: true,
+      });
+      expect(executionContext.operation.getParentCandidate).toHaveBeenCalledWith(0);
+    });
+
+    it('keeps flat V2 passthrough units on existing scalar batch transport', async () => {
+      const payload = [
+        { t: 'A', i: 'n1', b: 'g1', r: 'pre' },
+        { t: 'B', i: 'n2', b: 'g1', r: 'pre' },
+      ];
+      mockEngine.createIntelligentBatches = vi.fn(() => [payload]);
+      mockProvider.translate.mockResolvedValueOnce({ translatedText: ['Uno', 'Dos'] });
+
+      const result = await handler.execute(
+        mockEngine,
+        { ...mockData, text: JSON.stringify(payload), sourceLanguage: 'en' },
+        mockProvider,
+        'en',
+        'fa',
+        'flat-v2-units',
+        mockSender,
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockProvider.translate.mock.calls[0][0]).toEqual(['A', 'B']);
+      expect(mockProvider.translate.mock.calls[0][3].contextMetadata)
+        .not.toHaveProperty('preserveBatchUnitObjects');
+    });
+
+    it('uses b for grouped fragment conversation ownership and reassembles by unit parentId', async () => {
+      const payload = [{
+        t: 'The final season',
+        i: 'n1',
+        wireId: 'n1::fragment:0',
+        b: 0,
+        group: 0,
+        part: 0,
+        parentId: 'n1',
+        fragmentIndex: 0,
+        fragmentCount: 1,
+        isSplitFragment: true,
+      }];
+      mockEngine.createIntelligentBatches = vi.fn(() => [payload]);
+      mockProvider.translate.mockResolvedValueOnce({
+        translatedText: [{ id: 'n1::fragment:0', text: 'Translated season' }],
+      });
+      const executionContext = {
+        operation: {
+          getParentCandidate: vi.fn((parentId) => parentId === 0 ? {} : null),
+        },
+      };
+
+      const result = await handler.execute(
+        mockEngine,
+        { ...mockData, text: JSON.stringify(payload), sourceLanguage: 'en' },
+        mockProvider,
+        'en',
+        'fa',
+        'grouped-fragment-b-alias',
+        mockSender,
+        'unknown',
+        executionContext,
+      );
+
+      expect(result.results).toEqual([expect.objectContaining({ i: 'n1', t: 'Translated season' })]);
+      expect(result.results[0]).not.toHaveProperty('wireId');
+      expect(mockProvider.translate.mock.calls[0][3].contextMetadata)
+        .toMatchObject({ useParentConversationLifecycle: true });
+      expect(executionContext.operation.getParentCandidate).toHaveBeenCalledWith(0);
+    });
+
     it('should keep the history-enabled lane ordered', async () => {
       vi.useRealTimers();
       const { getAIConversationHistoryEnabledAsync } = await import('@/shared/config/config.js');
