@@ -231,6 +231,10 @@ function validateStringResponseValue(value, source, providerName, index) {
   }
 }
 
+function isSpecializedStreamingOwnerMode(mode) {
+  return mode === TranslationMode.Select_Element || mode === TranslationMode.Page || mode === TranslationMode.PDF;
+}
+
 function validateSequentialStringResponse(response, sourceTexts, providerName) {
   if (Array.isArray(response)) {
     // A single STRING request must not accept an array-shaped native value.
@@ -297,9 +301,9 @@ export class BaseAIProvider extends BaseProvider {
     const batchStrategy = await this.getBatchStrategy(translateMode);
 
     // 1. Try streaming if supported and beneficial
-    // FIX: Only enter streaming path if thresholds are met OR if already initialized by coordinator
+    // Specialized orchestrator modes (Select_Element/Page/PDF) own publication via OJH, never via provider-internal streaming
     const shouldStream = await this._shouldUseStreaming(texts, messageId, engine, translateMode);
-    const isAlreadyStreaming = messageId && AIStreamManager.isStreamActive(messageId);
+    const isAlreadyStreaming = !isSpecializedStreamingOwnerMode(translateMode) && messageId && AIStreamManager.isStreamActive(messageId);
 
     if (supportsStreaming && (shouldStream || isAlreadyStreaming)) {
       return this._streamingBatchTranslate(texts, sourceLang, targetLang, translateMode, engine, messageId, abortController, priority, sessionId, expectedFormat, conversationOptions);
@@ -327,8 +331,8 @@ export class BaseAIProvider extends BaseProvider {
    * Determine if streaming should be used for this request
    */
   async _shouldUseStreaming(texts, messageId, engine, translateMode) {
-    // Disable internal AI streaming for Select Element or Page modes 
-    if (translateMode === TranslationMode.Select_Element || translateMode === TranslationMode.Page || translateMode === TranslationMode.PDF) {
+    // Disable internal AI streaming for specialized orchestrator modes (single owner: OJH)
+    if (isSpecializedStreamingOwnerMode(translateMode)) {
       return false;
     }
 

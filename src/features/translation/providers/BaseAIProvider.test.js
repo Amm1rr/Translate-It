@@ -1974,4 +1974,109 @@ beforeEach(() => {
       expect(spy.mock.calls.every(([, , options]) => options.callPurpose === TranslationCallPurpose.PRIMARY_TRANSLATION)).toBe(true);
     });
   });
+
+  describe('_batchTranslate streaming ownership', () => {
+    it('Select_Element with active outer stream does NOT use provider streaming', async () => {
+      const { TranslationMode } = await import('@/shared/config/config.js');
+      const streamingSpy = vi.spyOn(provider, '_streamingBatchTranslate').mockResolvedValue(['streamed']);
+      const batchSpy = vi.spyOn(provider, '_translateBatch').mockResolvedValue(['batched']);
+      const supportsSpy = vi.spyOn(provider, 'getSupportsStreaming').mockResolvedValue(true);
+      const shouldSpy = vi.spyOn(provider, '_shouldUseStreaming').mockResolvedValue(false);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+      const engine = {};
+
+      try {
+        const result = await provider._batchTranslate(['a','b'], 'en', 'fa', TranslationMode.Select_Element, engine, 'msg-select', null, null, null, null, {});
+        expect(streamingSpy).not.toHaveBeenCalled();
+        expect(batchSpy).toHaveBeenCalled();
+        expect(result).toEqual(['batched']);
+      } finally {
+        streamingSpy.mockRestore();
+        batchSpy.mockRestore();
+        supportsSpy.mockRestore();
+        shouldSpy.mockRestore();
+        activeSpy.mockRestore();
+      }
+    });
+
+    it('Page with active outer stream does NOT use provider streaming', async () => {
+      const { TranslationMode } = await import('@/shared/config/config.js');
+      const streamingSpy = vi.spyOn(provider, '_streamingBatchTranslate').mockResolvedValue(['streamed']);
+      const batchSpy = vi.spyOn(provider, '_translateBatch').mockResolvedValue(['batched']);
+      const supportsSpy = vi.spyOn(provider, 'getSupportsStreaming').mockResolvedValue(true);
+      const shouldSpy = vi.spyOn(provider, '_shouldUseStreaming').mockResolvedValue(false);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+
+      try {
+        const result = await provider._batchTranslate(['a','b'], 'en', 'fa', TranslationMode.Page, {}, 'msg-page', null, null, null, null, {});
+        expect(streamingSpy).not.toHaveBeenCalled();
+        expect(batchSpy).toHaveBeenCalled();
+        expect(result).toEqual(['batched']);
+      } finally {
+        streamingSpy.mockRestore();
+        batchSpy.mockRestore();
+        supportsSpy.mockRestore();
+        shouldSpy.mockRestore();
+        activeSpy.mockRestore();
+      }
+    });
+
+    it('PDF with active outer stream does NOT use provider streaming', async () => {
+      const { TranslationMode } = await import('@/shared/config/config.js');
+      const streamingSpy = vi.spyOn(provider, '_streamingBatchTranslate').mockResolvedValue(['streamed']);
+      const batchSpy = vi.spyOn(provider, '_translateBatch').mockResolvedValue(['batched']);
+      const supportsSpy = vi.spyOn(provider, 'getSupportsStreaming').mockResolvedValue(true);
+      const shouldSpy = vi.spyOn(provider, '_shouldUseStreaming').mockResolvedValue(false);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+
+      try {
+        const result = await provider._batchTranslate(['a','b'], 'en', 'fa', TranslationMode.PDF, {}, 'msg-pdf', null, null, null, null, {});
+        expect(streamingSpy).not.toHaveBeenCalled();
+        expect(batchSpy).toHaveBeenCalled();
+        expect(result).toEqual(['batched']);
+      } finally {
+        streamingSpy.mockRestore();
+        batchSpy.mockRestore();
+        supportsSpy.mockRestore();
+        shouldSpy.mockRestore();
+        activeSpy.mockRestore();
+      }
+    });
+
+    it('normal mode with already active stream and shouldUseStreaming false DOES use provider streaming', async () => {
+      const streamingSpy = vi.spyOn(provider, '_streamingBatchTranslate').mockResolvedValue(['streamed']);
+      const supportsSpy = vi.spyOn(provider, 'getSupportsStreaming').mockResolvedValue(true);
+      const shouldSpy = vi.spyOn(provider, '_shouldUseStreaming').mockResolvedValue(false);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+
+      try {
+        const result = await provider._batchTranslate(['a','b'], 'en', 'fa', 'selection', {}, 'msg-normal', null, null, null, null, {});
+        expect(streamingSpy).toHaveBeenCalled();
+        expect(result).toEqual(['streamed']);
+      } finally {
+        streamingSpy.mockRestore();
+        supportsSpy.mockRestore();
+        shouldSpy.mockRestore();
+        activeSpy.mockRestore();
+      }
+    });
+
+    it('normal threshold streaming still enters', async () => {
+      const streamingSpy = vi.spyOn(provider, '_streamingBatchTranslate').mockResolvedValue(['streamed']);
+      const supportsSpy = vi.spyOn(provider, 'getSupportsStreaming').mockResolvedValue(true);
+      const shouldSpy = vi.spyOn(provider, '_shouldUseStreaming').mockResolvedValue(true);
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(false);
+
+      try {
+        const result = await provider._batchTranslate(['a','b','c'], 'en', 'fa', 'selection', {}, 'msg-threshold', null, null, null, null, {});
+        expect(streamingSpy).toHaveBeenCalled();
+        expect(result).toEqual(['streamed']);
+      } finally {
+        streamingSpy.mockRestore();
+        supportsSpy.mockRestore();
+        shouldSpy.mockRestore();
+        activeSpy.mockRestore();
+      }
+    });
+  });
 });
