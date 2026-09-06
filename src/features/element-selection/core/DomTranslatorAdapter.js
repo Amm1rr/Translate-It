@@ -413,27 +413,26 @@ export class DomTranslatorAdapter extends ResourceTracker {
       });
 
       // 2. Prepare payload - keep the original node map stable with a 1:1 mapping.
-      // Use abbreviated keys to save tokens: t=text, i=uid, b=blockId, r=role
+      // V3 markers remain local reconstruction data. Standard V3 units carry
+      // adjacent-group context; V2 passthrough units retain their flat transport.
       let textsToTranslate = [];
       if (isBlockGroupingEnabled) {
-        textsToTranslate = groups.flatMap(g => {
-          if (g.isV2Passthrough) {
-            return g.units.map(unit => ({
+        textsToTranslate = groups.flatMap(group => group.isV2Passthrough
+          ? group.units.map(unit => ({
               t: unit.text || '',
               i: unit.id,
-              b: g.blockId,
-              r: g.role
-            }));
-          } else {
-            const assembled = BlockGroupReconstructor.injectMarkers(g.units, this.currentSessionId, this.currentEntropy);
-            return {
-              t: assembled,
-              i: g.id,
-              b: g.blockId,
-              r: g.role
-            };
-          }
-        });
+              b: group.blockId,
+              r: group.role,
+            }))
+          : group.units.map((unit, part) => ({
+              t: unit.text || '',
+              i: unit.id,
+              b: group.blockId,
+              r: group.role,
+              group: group.blockId,
+              part,
+            }))
+        );
       } else {
         textsToTranslate = textNodesData.map((data) => ({
           t: data.text || '',
@@ -455,10 +454,8 @@ export class DomTranslatorAdapter extends ResourceTracker {
               : group.units.map(unit => `${unit.leadingWS || ''}${unit.text}${unit.trailingWS || ''}`).join(''),
           }))
         : textNodesData.reduce((parents, data, sourceOrder) => {
-            const parentId = typeof data.blockId === 'string' && data.blockId.trim()
-              ? data.blockId
-              : null;
-            if (!parentId) return parents;
+            const parentId = data.blockId ?? null;
+            if (parentId === null) return parents;
             let parent = directParentStates.get(parentId);
             if (!parent) {
               parent = {
@@ -687,6 +684,7 @@ export class DomTranslatorAdapter extends ResourceTracker {
         const parents = isBlockGroupingEnabled ? groups : Array.from(directParentStates.values());
         parents.forEach(parent => {
           if (parent.applied || parent.acceptanceSettled) return;
+          parent.invalid = true;
           this._settleParentAcceptance(parent, false, null, translationToken);
         });
       };
@@ -730,8 +728,12 @@ export class DomTranslatorAdapter extends ResourceTracker {
       // Tracking processed nodes to avoid multi-batch conflicts
       const processedUids = new Set();
 
-      const ingestPassthroughResult = (group, uid, contentResult, targetLanguage, token) => {
+      const ingestGroupedUnitResult = (group, uid, contentResult, targetLanguage, token) => {
         if (group.invalid || group.applied) return;
+        if (!group.units.some(unit => unit.id === uid)) {
+          group.invalid = true;
+          return;
+        }
         if (contentResult.status !== 'valid') {
           group.invalid = true;
           return;
@@ -758,7 +760,17 @@ export class DomTranslatorAdapter extends ResourceTracker {
           translationFontFamily
         );
         this._commitBlockGroup(group, reconstruction, translatedBlock, processedUids, token);
-        group.applied = true;
+      };
+
+      const rejectGroupedResult = (item, uid, index, reason) => {
+        const parentId = item?.parentId ?? item?.blockId ?? item?.b ?? item?.group;
+        const group = groupMap.get(uid) ?? groupMap.get(parentId);
+        if (!group) {
+          this._logRejectedMapping(index, uid, reason);
+          return;
+        }
+        group.invalid = true;
+        this._logRejectedMapping(index, uid, reason);
       };
 
       // ELIMINATE UNCAUGHT PROMISE ERRORS: Use resolve-only pattern for the stream promise
@@ -806,13 +818,33 @@ export class DomTranslatorAdapter extends ResourceTracker {
 
               if (data.data && Array.isArray(data.data)) {
                 const resultIdentities = data.data.map(item => this._getResultIdentity(item));
-                const duplicateIdentities = new Set(
-                  resultIdentities
-                    .filter(result => result.status === 'valid')
-                    .map(result => result.identity)
-                    .filter((identity, index, identities) => identities.indexOf(identity) !== index)
-                );
-                data.data.forEach((translatedItem, index) => {
+                 const duplicateIdentities = new Set(
+                   resultIdentities
+                     .filter(result => result.status === 'valid')
+                     .map(result => result.identity)
+                     .filter((identity, index, identities) => identities.indexOf(identity) !== index)
+                 );
+                 const rejectedIndexes = new Set();
+                 if (isBlockGroupingEnabled) {
+                   data.data.forEach((translatedItem, index) => {
+                     if (translatedItem?.isSplitFragment === true || translatedItem?.isV3Fragment === true) return;
+                     const identityResult = this._getResultIdentity(translatedItem);
+                     const uid = identityResult.identity;
+                     const group = groupMap?.get(uid);
+                     const isExpectedUnit = group?.units.some(unit => unit.id === uid);
+                     if (identityResult.status !== 'valid' || duplicateIdentities.has(uid) || !isExpectedUnit) {
+                       rejectedIndexes.add(index);
+                       rejectGroupedResult(
+                         translatedItem,
+                         uid,
+                         index,
+                         duplicateIdentities.has(uid) ? 'duplicate' : identityResult.status === 'valid' ? 'unknown' : identityResult.status,
+                       );
+                     }
+                   });
+                 }
+                 data.data.forEach((translatedItem, index) => {
+                   if (rejectedIndexes.has(index)) return;
                    if (translatedItem?.isSplitFragment === true || translatedItem?.isV3Fragment === true) {
                       this.logger.warn('[DomTranslatorAdapter] Suppressed incomplete fragment event');
                       return;
@@ -821,49 +853,42 @@ export class DomTranslatorAdapter extends ResourceTracker {
                    const identityResult = this._getResultIdentity(translatedItem);
                    const uid = identityResult.identity;
                    const contentResult = this._getResultContent(translatedItem);
-                   const text = contentResult.content;
 
-                   if (!isBlockGroupingEnabled) {
-                     ingestDirectResult(translatedItem, index, effectiveTargetLanguage, translationToken);
+                    if (!isBlockGroupingEnabled) {
+                      ingestDirectResult(translatedItem, index, effectiveTargetLanguage, translationToken);
                      return;
                    }
 
-                   if (identityResult.status !== 'valid' || (isBlockGroupingEnabled && duplicateIdentities.has(uid))) {
-                      const duplicateGroup = groupMap?.get(uid);
-                      if (duplicateGroup?.isV2Passthrough) duplicateGroup.invalid = true;
-                      this._logRejectedMapping(index, uid, duplicateIdentities.has(uid) ? 'duplicate' : identityResult.status);
-                      return;
+                    if (identityResult.status !== 'valid' || (isBlockGroupingEnabled && duplicateIdentities.has(uid))) {
+                       rejectGroupedResult(
+                         translatedItem,
+                         uid,
+                         index,
+                         duplicateIdentities.has(uid) ? 'duplicate' : identityResult.status,
+                       );
+                       return;
                     }
 
-                   if (isBlockGroupingEnabled && groupMap && groupMap.has(uid)) {
-                    const group = groupMap.get(uid);
-                      if (group.isV2Passthrough) {
-                         try {
-                           if (!this._isCurrentTranslation(translationToken)) return;
-                           ingestPassthroughResult(group, uid, contentResult, effectiveTargetLanguage, translationToken);
-                         } catch (error) {
-                           const originalError = unwrapMutationFailure(error);
-                           this.logger.error(`[Reconstructor] Apply failed for V2 group ${group.blockId}:`, originalError);
-                           if (error instanceof BlockGroupMutationFailure) {
-                             error.rollbackFailures.forEach(failure => this.logger.error('[Reconstructor] Group rollback failed', failure));
-                           }
-                            this._settleParentAcceptance(group, false, null, translationToken);
-                            settleTerminalParents(translationToken);
-                            throw error;
+                    if (isBlockGroupingEnabled && groupMap && groupMap.has(uid)) {
+                     const group = groupMap.get(uid);
+                       try {
+                         if (!this._isCurrentTranslation(translationToken)) return;
+                         if (contentResult.status !== 'valid') {
+                           this._logRejectedContent(index, contentResult.status);
                          }
-                    } else {
-                      if (contentResult.status !== 'valid') {
-                        this._logRejectedContent(index, contentResult.status);
-                        group.invalid = true;
-                        return;
-                      }
-                      const anyProcessed = group.units.some(u => processedUids.has(u.id));
-                      if (!anyProcessed) {
-                        try {
-                           if (!this._isCurrentTranslation(translationToken)) return;
-                            const reconstruction = BlockGroupReconstructor.apply(group.units, text, effectiveTargetLanguage, element, this.currentSessionId, this.currentEntropy, translationFontFamily);
-                           this._commitBlockGroup(group, reconstruction, text, processedUids, translationToken);
-                        } catch (error) {
+                         ingestGroupedUnitResult(group, uid, contentResult, effectiveTargetLanguage, translationToken);
+                       } catch (error) {
+                          const isSystemic = error?.operationAborted === true
+                            || error?.name === 'AbortError'
+                            || error?.isCancelled
+                            || error?.type === ErrorTypes.USER_CANCELLED
+                            || error?.type === ErrorTypes.TRANSLATION_CANCELLED
+                            || error?.type === ErrorTypes.TRANSLATION_TIMEOUT
+                            || isCancellationError(error)
+                            || isFatalError(error)
+                            || !ExtensionContextManager.isValidSync()
+                            || !this._isCurrentTranslation(translationToken);
+                          if (isSystemic) throw error;
                           const originalError = unwrapMutationFailure(error);
                           this.logger.error(`[Reconstructor] Apply failed for block group ${group.blockId}:`, originalError);
                           if (error instanceof BlockGroupMutationFailure) {
@@ -871,19 +896,16 @@ export class DomTranslatorAdapter extends ResourceTracker {
                           } else {
                             this._rollbackBlockGroup(this.currentSessionId, group.blockId);
                           }
+                          group.invalid = true;
                           this._settleParentAcceptance(group, false, null, translationToken);
-                          settleTerminalParents(translationToken);
-                          throw error;
                         }
+                      } else {
+                         rejectGroupedResult(translatedItem, uid, index, 'unknown');
                       }
-                    }
-                   } else {
-                     ingestDirectResult(translatedItem, index, effectiveTargetLanguage, translationToken);
-                   }
-                 });
+                  });
 
-                 if (!isBlockGroupingEnabled) {
-                   finalizeDirectParents(effectiveTargetLanguage, translationToken);
+                  if (!isBlockGroupingEnabled) {
+                    finalizeDirectParents(effectiveTargetLanguage, translationToken);
                  }
 
                  // Emit progress update using completed count when available, with batch index as fallback.
@@ -902,13 +924,10 @@ export class DomTranslatorAdapter extends ResourceTracker {
                   }
                 }
               }
-             } catch (err) {
-               this.logger.error('Error during onStreamUpdate processing:', err);
-               if (err instanceof BlockGroupMutationFailure) {
-                 settleTerminalParents(translationToken);
-               }
-               safeResolve({ success: false, error: err });
-             }
+              } catch (err) {
+                this.logger.error('Error during onStreamUpdate processing:', err);
+                safeResolve({ success: false, error: err });
+              }
           },
           onStreamEnd: (data) => {
             if (isSettled) return;
@@ -1010,10 +1029,9 @@ export class DomTranslatorAdapter extends ResourceTracker {
           translationToken,
             ingestDirectResult,
             finalizeDirectParents,
-            ingestPassthroughResult,
-            settleTerminalParents,
-            translationFontFamily
-         );
+            ingestGroupedUnitResult,
+            rejectGroupedResult
+          );
       } else {
         result = response;
       }
@@ -1355,7 +1373,7 @@ export class DomTranslatorAdapter extends ResourceTracker {
     }
   }
 
-  async _handleDirectResponse(response, textNodesData, nodeMap, targetLanguage, element, translationToken, ingestDirectResult, finalizeDirectParents, ingestPassthroughResult, settleTerminalParents, translationFontFamily = null) {
+  async _handleDirectResponse(response, textNodesData, nodeMap, targetLanguage, element, translationToken, ingestDirectResult, finalizeDirectParents, ingestGroupedUnitResult, rejectGroupedResult) {
     this.logger.debug(`[DomTranslatorAdapter] _handleDirectResponse called (batchCount: ${this.batchCount})`);
 
     if (this.sessionContext === undefined && (!ingestDirectResult || !finalizeDirectParents)) {
@@ -1382,7 +1400,6 @@ export class DomTranslatorAdapter extends ResourceTracker {
       const results = Array.isArray(rawResults) ? rawResults : [rawResults];
       const finalTargetLanguage = response.targetLanguage || targetLanguage;
 
-      const processedUids = new Set();
       const isBlockGroupingEnabled = this.sessionContext !== undefined;
 
       const resultIdentities = results.map(item => this._getResultIdentity(item));
@@ -1392,8 +1409,28 @@ export class DomTranslatorAdapter extends ResourceTracker {
           .map(result => result.identity)
           .filter((identity, index, identities) => identities.indexOf(identity) !== index)
       );
+      const rejectedIndexes = new Set();
+      if (isBlockGroupingEnabled) {
+        results.forEach((item, index) => {
+          if (item?.isSplitFragment === true || item?.isV3Fragment === true) return;
+          const identityResult = this._getResultIdentity(item);
+          const uid = identityResult.identity;
+          const group = this.groupMap?.get(uid);
+          const isExpectedUnit = group?.units.some(unit => unit.id === uid);
+          if (identityResult.status !== 'valid' || duplicateIdentities.has(uid) || !isExpectedUnit) {
+            rejectedIndexes.add(index);
+            rejectGroupedResult(
+              item,
+              uid,
+              index,
+              duplicateIdentities.has(uid) ? 'duplicate' : identityResult.status === 'valid' ? 'unknown' : identityResult.status,
+            );
+          }
+        });
+      }
 
       results.forEach((item, i) => {
+        if (rejectedIndexes.has(i)) return;
         if (translationToken && !this._isCurrentTranslation(translationToken)) return;
         if (item?.isSplitFragment === true) {
           this.logger.warn('[DomTranslatorAdapter] Suppressed incomplete V2 fragment result');
@@ -1402,63 +1439,54 @@ export class DomTranslatorAdapter extends ResourceTracker {
         const identityResult = this._getResultIdentity(item);
         const uid = identityResult.identity;
         const contentResult = this._getResultContent(item);
-        const text = contentResult.content;
-
         if (!isBlockGroupingEnabled) {
           ingestDirectResult(item, i, finalTargetLanguage, translationToken);
           return;
         }
 
         if (identityResult.status !== 'valid' || (isBlockGroupingEnabled && duplicateIdentities.has(uid))) {
-          const duplicateGroup = this.groupMap?.get(uid);
-          if (duplicateGroup?.isV2Passthrough) duplicateGroup.invalid = true;
-          this._logRejectedMapping(i, uid, duplicateIdentities.has(uid) ? 'duplicate' : identityResult.status);
+          rejectGroupedResult(
+            item,
+            uid,
+            i,
+            duplicateIdentities.has(uid) ? 'duplicate' : identityResult.status,
+          );
           return;
         }
 
         if (isBlockGroupingEnabled && this.groupMap && this.groupMap.has(uid)) {
           const group = this.groupMap.get(uid);
-          if (group.isV2Passthrough) {
-               try {
-                 if (translationToken && !this._isCurrentTranslation(translationToken)) return;
-                 ingestPassthroughResult(group, uid, contentResult, finalTargetLanguage, translationToken);
-               } catch (error) {
-                 const originalError = unwrapMutationFailure(error);
-                 this.logger.error(`[Reconstructor] Apply failed for V2 group ${group.blockId}:`, originalError);
-                 if (error instanceof BlockGroupMutationFailure) {
-                   error.rollbackFailures.forEach(failure => this.logger.error('[Reconstructor] Group rollback failed', failure));
-                  }
-                  this._settleParentAcceptance(group, false, null, translationToken);
-                  settleTerminalParents?.(translationToken);
-                  throw error;
-               }
-          } else {
+          try {
+            if (translationToken && !this._isCurrentTranslation(translationToken)) return;
             if (contentResult.status !== 'valid') {
               this._logRejectedContent(i, contentResult.status);
-              group.invalid = true;
-              return;
             }
-            const anyProcessed = group.units.some(u => processedUids.has(u.id));
-            if (!anyProcessed) {
-              try {
-                  if (translationToken && !this._isCurrentTranslation(translationToken)) return;
-                  const reconstruction = BlockGroupReconstructor.apply(group.units, text, finalTargetLanguage, element, this.currentSessionId, this.currentEntropy, translationFontFamily);
-                  this._commitBlockGroup(group, reconstruction, text, processedUids, translationToken);
-               } catch (error) {
-                 const originalError = unwrapMutationFailure(error);
-                 this.logger.error(`[Reconstructor] Apply failed for block group ${group.blockId}:`, originalError);
-                 if (error instanceof BlockGroupMutationFailure) {
-                   error.rollbackFailures.forEach(failure => this.logger.error('[Reconstructor] Group rollback failed', failure));
-                 } else {
-                   this._rollbackBlockGroup(this.currentSessionId, group.blockId);
-                  }
-                  this._settleParentAcceptance(group, false, null, translationToken);
-                  settleTerminalParents?.(translationToken);
-                  throw error;
-              }
+            ingestGroupedUnitResult(group, uid, contentResult, finalTargetLanguage, translationToken);
+          } catch (error) {
+            const isSystemic = error?.operationAborted === true
+              || error?.name === 'AbortError'
+              || error?.isCancelled
+              || error?.type === ErrorTypes.USER_CANCELLED
+              || error?.type === ErrorTypes.TRANSLATION_CANCELLED
+              || error?.type === ErrorTypes.TRANSLATION_TIMEOUT
+              || isCancellationError(error)
+              || isFatalError(error)
+              || !ExtensionContextManager.isValidSync()
+              || (translationToken && !this._isCurrentTranslation(translationToken));
+            if (isSystemic) throw error;
+            const originalError = unwrapMutationFailure(error);
+            this.logger.error(`[Reconstructor] Apply failed for block group ${group.blockId}:`, originalError);
+            if (error instanceof BlockGroupMutationFailure) {
+              error.rollbackFailures.forEach(failure => this.logger.error('[Reconstructor] Group rollback failed', failure));
+            } else {
+              this._rollbackBlockGroup(this.currentSessionId, group.blockId);
             }
+            group.invalid = true;
+            this._settleParentAcceptance(group, false, null, translationToken);
           }
-          }
+        } else {
+          rejectGroupedResult(item, uid, i, 'unknown');
+        }
       });
 
       if (finalizeDirectParents) finalizeDirectParents(finalTargetLanguage, translationToken);
@@ -1487,9 +1515,6 @@ export class DomTranslatorAdapter extends ResourceTracker {
         targetLanguage: finalTargetLanguage
       };
     } catch (err) {
-      if (err instanceof BlockGroupMutationFailure) {
-        settleTerminalParents?.(translationToken);
-      }
       this.logger.error('Direct translation handling failed:', err);
       const errorType = matchErrorToType(err);
       if (
@@ -1596,7 +1621,7 @@ export class DomTranslatorAdapter extends ResourceTracker {
     if (!this._conversationAcceptanceEnabled) return;
     if (!ExtensionContextManager.isValidSync()) return;
     if (translationToken && !this._isCurrentTranslation(translationToken)) return;
-    if (!this.currentMessageId || !parentId) {
+    if (!this.currentMessageId || parentId === null || parentId === undefined) {
       this.logger.error('[DomTranslatorAdapter] Missing canonical blockId for parent acceptance ACK', {
         code: 'MISSING_CANONICAL_PARENT_IDENTITY',
         messageId: this.currentMessageId,
@@ -1622,8 +1647,8 @@ export class DomTranslatorAdapter extends ResourceTracker {
     if (translationToken && !this._isCurrentTranslation(translationToken)) return;
     if (!ExtensionContextManager.isValidSync()) return;
 
-    const parentId = parent.parentId || parent.blockId;
-    if (!parentId) return;
+    const parentId = parent.parentId ?? parent.blockId;
+    if (parentId === null || parentId === undefined) return;
 
     parent.acceptanceSettled = true;
     parent.acknowledged = accepted;

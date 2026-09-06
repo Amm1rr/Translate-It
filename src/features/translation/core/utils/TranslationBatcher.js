@@ -31,11 +31,15 @@ export const TranslationBatcher = {
     let partIndex = 0;
     let fragmentJoinerBefore = '';
     const isV2Unit = isObject && segment.isV2Unit === true;
+    const isGroupedUnit = isObject
+      && segment.group !== null
+      && segment.group !== undefined
+      && Number.isInteger(segment.part);
     // Normalized V3 parent identity: full-field blockId (may be absent) falls
     // back to the abbreviated Select Element representation (b). V3 detection
     // and parentId must both resolve from the same normalized value.
     const blockId = isObject ? (segment.blockId ?? segment.b) : null;
-    const isV3Block = isObject && !isV2Unit && blockId !== null && blockId !== undefined;
+    const isV3Block = isObject && !isV2Unit && !isGroupedUnit && blockId !== null && blockId !== undefined;
     let markerSpans = null;
 
     if (isV3Block) {
@@ -49,7 +53,7 @@ export const TranslationBatcher = {
       text: partText,
       isSplit: true,
       partIndex: index,
-      ...(isV2Unit || isV3Block ? { fragmentJoinerBefore } : {}),
+      ...(isV2Unit || isGroupedUnit || isV3Block ? { fragmentJoinerBefore } : {}),
     });
     
     while (remaining.length > maxChars) {
@@ -103,6 +107,19 @@ export const TranslationBatcher = {
       }
     }
     
+    if (isGroupedUnit) {
+      const parentId = segment.i ?? segment.uid ?? segment.id;
+      return chunks.map((chunk, fragmentIndex) => ({
+        ...chunk,
+        // Keep logical i stable; wireId makes each provider response slot unique.
+        wireId: `${String(parentId)}::fragment:${fragmentIndex}`,
+        parentId,
+        fragmentIndex,
+        fragmentCount: chunks.length,
+        isSplitFragment: true
+      }));
+    }
+
     if (isV2Unit) {
       const parentId = segment.i ?? segment.uid ?? segment.id;
       return chunks.map((chunk, fragmentIndex) => ({
@@ -183,13 +200,15 @@ export const TranslationBatcher = {
       
       const segmentComplexity = ComplexityAnalyzer.calculateTextComplexity(text);
       const segmentChars = text.length;
-      const blockId = isObject ? segment.blockId : null;
+      const blockId = isObject ? (segment.blockId ?? segment.b) : null;
+      const hasBlockId = blockId !== null && blockId !== undefined;
+      const hasLastBlockId = lastBlockId !== null && lastBlockId !== undefined;
       
       // Calculate dynamic batch size limit based on segment complexity
       const adjustedBatchSize = ComplexityAnalyzer.getAdjustedBatchSize(segmentComplexity, baseBatchSize);
       
       // Logical Grouping: Try to keep items from the same block together
-      const isBlockBoundary = lastBlockId && blockId && lastBlockId !== blockId;
+      const isBlockBoundary = hasLastBlockId && hasBlockId && lastBlockId !== blockId;
       
       // Capacity checks
       const wouldExceedSize = currentBatch.length >= adjustedBatchSize;

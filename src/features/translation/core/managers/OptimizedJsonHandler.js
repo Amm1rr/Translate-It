@@ -412,7 +412,7 @@ export class OptimizedJsonHandler {
                 callPurpose: TranslationCallPurpose.PARENT_RECOVERY,
                 conversationParticipates: false,
                 useParentConversationLifecycle: false,
-                parentRecoveryIntervalUnits: true,
+                preserveBatchUnitObjects: true,
               },
               options?.contextSummary,
               engine,
@@ -761,9 +761,9 @@ export class OptimizedJsonHandler {
 
           for (let index = startIndex; index < mappedResults.length; index++) {
             const result = mappedResults[index];
-           if (result?.isV2Unit === true && result?.isSplitFragment === true) {
+            if (result?.isSplitFragment === true) {
              const { parentId, fragmentIndex, fragmentCount } = result;
-             if (!parentId || !Number.isInteger(fragmentIndex) || !Number.isInteger(fragmentCount) || fragmentIndex < 0 || fragmentIndex >= fragmentCount) {
+              if ((parentId === null || parentId === undefined) || !Number.isInteger(fragmentIndex) || !Number.isInteger(fragmentCount) || fragmentIndex < 0 || fragmentIndex >= fragmentCount) {
                appendFragmentDiagnostic('INCOMPLETE_FRAGMENT_EVENT_SUPPRESSED', parentId);
                continue;
              }
@@ -797,9 +797,10 @@ export class OptimizedJsonHandler {
              delete logicalItem.parentId;
              delete logicalItem.fragmentIndex;
              delete logicalItem.fragmentCount;
-             delete logicalItem.fragmentJoinerBefore;
-             delete logicalItem.isV2Unit;
-              validateAndAdd({ ...logicalItem, i: parentId, t: translatedText, text: translatedText });
+          delete logicalItem.fragmentJoinerBefore;
+          delete logicalItem.isV2Unit;
+          delete logicalItem.wireId;
+           validateAndAdd({ ...logicalItem, i: parentId, t: translatedText, text: translatedText });
               parent.emitted = true;
               parent.fragments.clear();
               appendFragmentDiagnostic('FRAGMENTED_UNIT_COMPLETED', parentId);
@@ -808,7 +809,7 @@ export class OptimizedJsonHandler {
 
             if (result?.isV3Fragment === true) {
              const { parentId, fragmentIndex, fragmentCount } = result;
-             if (!parentId || !Number.isInteger(fragmentIndex) || !Number.isInteger(fragmentCount) || fragmentIndex < 0 || fragmentIndex >= fragmentCount) {
+              if ((parentId === null || parentId === undefined) || !Number.isInteger(fragmentIndex) || !Number.isInteger(fragmentCount) || fragmentIndex < 0 || fragmentIndex >= fragmentCount) {
                appendFragmentDiagnostic('INCOMPLETE_FRAGMENT_EVENT_SUPPRESSED', parentId);
                continue;
              }
@@ -881,11 +882,11 @@ const parentError = createParentValidationError(parentIdStr, sourceText, transla
 
        const discardFailedFragments = (batchPayload) => {
          for (const payload of batchPayload) {
-           const isV2Fragment = payload?.isV2Unit === true && payload?.isSplitFragment === true;
-           const isV3Fragment = payload?.isV3Fragment === true;
-           if (!isV2Fragment && !isV3Fragment) continue;
+            const isSplitFragment = payload?.isSplitFragment === true;
+            const isV3Fragment = payload?.isV3Fragment === true;
+            if (!isSplitFragment && !isV3Fragment) continue;
            const parentId = payload.parentId;
-           if (!parentId) continue;
+            if (parentId === null || parentId === undefined) continue;
            const parent = fragmentedUnits.get(parentId) || { expectedCount: payload.fragmentCount, fragments: new Map(), failed: false, emitted: false };
            if (parent.emitted || parent.failed) continue;
            parent.failed = true;
@@ -1000,9 +1001,16 @@ const parentError = createParentValidationError(parentIdStr, sourceText, transla
           if (abortController.signal.aborted) checkCancellation();
             
            batchPayload = hasManifestMembership ? batch.map(({ payload }) => payload) : batch;
-           const explicitParentIds = batch.map(item => item && typeof item === 'object'
-             ? (item.parentId ?? item.blockId)
-             : null);
+           const groupedUnitTransport = providerInstance.constructor.isAI
+             && mode === TranslationMode.Select_Element
+             && batchPayload.some(item => item
+               && typeof item === 'object'
+               && item.group !== null
+               && item.group !== undefined
+               && Number.isInteger(item.part));
+           const explicitParentIds = batchPayload.map(item => item && typeof item === 'object'
+              ? (item.blockId ?? item.b ?? item.parentId)
+              : null);
            const hasExplicitParentIdentity = explicitParentIds.some(parentId => parentId !== null && parentId !== undefined);
            const hasMissingParentIdentity = explicitParentIds.some(parentId => parentId === null || parentId === undefined);
            const ownedCount = explicitParentIds.filter(parentId => (
@@ -1043,10 +1051,11 @@ const parentError = createParentValidationError(parentIdStr, sourceText, transla
              && hasExplicitParentIdentity
              && ownedCount > 0
              && unownedCount === 0;
-           const batchContextMetadata = {
-             ...options?.contextMetadata,
-             ...(useParentConversationLifecycle && { useParentConversationLifecycle: true }),
-           };
+            const batchContextMetadata = {
+              ...options?.contextMetadata,
+              ...(useParentConversationLifecycle && { useParentConversationLifecycle: true }),
+              ...(groupedUnitTransport && { preserveBatchUnitObjects: true }),
+            };
           batchExecutionContext = hasManifestMembership
             ? self._createBatchExecutionContext(operationExecutionContext, batch)
             : operationExecutionContext;
@@ -1329,7 +1338,7 @@ hasErrors = true;
   async _performBatchCall(providerInstance, batch, source, target, mode, abortController, messageId, sessionId, contextMetadata, contextSummary, engine, sender, originalSourceLang = null, originalTargetLang = null, parallelExecution = false, executionContext = null, callPurpose = null, languagePairResolved = false) {
     const isArrayInput = Array.isArray(batch);
     const textsToTranslate = isArrayInput
-      ? (contextMetadata?.parentRecoveryIntervalUnits
+      ? (contextMetadata?.preserveBatchUnitObjects
         ? batch
         : batch.map(item => typeof item === 'object' ? (item.t || item.text || '') : (item || '')))
       : (typeof batch === 'object' ? (batch.t || batch.text || '') : (batch || ''));

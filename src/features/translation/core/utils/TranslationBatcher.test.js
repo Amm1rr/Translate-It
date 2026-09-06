@@ -200,6 +200,20 @@ describe('TranslationBatcher', () => {
       expect(members.every(({ manifestUnit }) => manifestUnit === null)).toBe(true);
       expect(members.every(({ isSplitFragment }) => isSplitFragment === true)).toBe(true);
     });
+
+    it('keeps abbreviated Select Element parent groups adjacent with manifest membership', () => {
+      const segments = [
+        { t: 'A', i: 'n1', b: 'g1', group: 'g1', part: 0 },
+        { t: 'B', i: 'n2', b: 'g1', group: 'g1', part: 1 },
+        { t: 'C', i: 'n3', b: 'g1', group: 'g1', part: 2 },
+        { t: 'D', i: 'n4', b: 'g2', group: 'g2', part: 0 },
+      ];
+      const manifest = createRequestUnitManifest(segments);
+      const batches = TranslationBatcher.createIntelligentMembershipBatches(segments, manifest.units, 4, 1000);
+
+      expect(batches.map(batch => batch.map(({ payload }) => payload.i))).toEqual([['n1', 'n2', 'n3'], ['n4']]);
+      expect(batches.flat().map(({ manifestUnit }) => manifestUnit)).toEqual(manifest.units);
+    });
   });
 
   describe('createOptimalBatches', () => {
@@ -253,6 +267,29 @@ describe('TranslationBatcher', () => {
       expect(parts[0].isV3Fragment).toBeUndefined();
       expect(parts[0].isSplit).toBeUndefined();
       expect(parts[0].parentId).toBeUndefined();
+    });
+
+    it('fragments grouped unit transport by unit identity instead of logical parent identity', () => {
+      const parts = TranslationBatcher.splitOversizedSegment(
+        { t: 'Part one. Part two.', i: 'n1', b: 'g1', group: 'g1', part: 0 },
+        10,
+      );
+
+      expect(parts).toHaveLength(2);
+      parts.forEach((part, index) => {
+        expect(part).toMatchObject({
+          i: 'n1',
+          b: 'g1',
+          group: 'g1',
+          part: 0,
+          wireId: `n1::fragment:${index}`,
+          parentId: 'n1',
+          fragmentIndex: index,
+          fragmentCount: 2,
+          isSplitFragment: true,
+        });
+        expect(part.isV3Fragment).toBeUndefined();
+      });
     });
 
     it('keeps a medium Select Element parent in one batch at levels 3 and 5', () => {

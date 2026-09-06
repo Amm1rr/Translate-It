@@ -376,10 +376,10 @@ describe('DomTranslatorAdapter Stress and Edge-Case Testing', () => {
   });
 
   // ==========================================
-  // STRESS TEST 5: Grouped Payload Verification (With Session-Scoped Markers)
+  // STRESS TEST 5: Grouped Unit Payload Verification
   // ==========================================
   describe('Grouped Payload Verification', () => {
-    it('should verify that multiple inline segments are sent as a grouped payload with session-scoped markers', async () => {
+    it('should verify that multiple inline segments are sent as plain grouped units', async () => {
       const container = document.createElement('div');
       container.innerHTML = 'Hello <span>world</span>!';
       document.body.appendChild(container);
@@ -392,20 +392,27 @@ describe('DomTranslatorAdapter Stress and Edge-Case Testing', () => {
       let sentPayload = null;
       contentScriptIntegration.sendTranslationRequest.mockImplementationOnce(async (message) => {
         sentPayload = JSON.parse(message.data.text);
-        const sessionId = message.data.sessionId;
-        const responseText = `سلام@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n2@@جهان@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n3@@!`;
-        return { success: true, streaming: false, translatedText: JSON.stringify([{ t: responseText, i: 'g1' }]) };
+        return {
+          success: true,
+          streaming: false,
+          translatedText: JSON.stringify([
+            { t: 'سلام', i: 'n1' },
+            { t: 'جهان', i: 'n2' },
+            { t: '!', i: 'n3' },
+          ]),
+        };
       });
 
       await adapter.translateElement(container);
 
       // Inspect sent payload
       expect(sentPayload).toBeDefined();
-      expect(sentPayload.length).toBe(1); // Single grouped block item, NOT 3 individual items!
-      expect(sentPayload[0].i).toBe('g1'); // The block ID is g1
-      
-      const sessionId = adapter.currentSessionId;
-      expect(sentPayload[0].t).toBe(`Hello@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n2@@world@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n3@@!`); // Contains session-scoped markers!
+      expect(sentPayload).toMatchObject([
+        { t: 'Hello', i: 'n1', b: 'g1', group: 'g1', part: 0 },
+        { t: 'world', i: 'n2', b: 'g1', group: 'g1', part: 1 },
+        { t: '!', i: 'n3', b: 'g1', group: 'g1', part: 2 },
+      ]);
+      expect(sentPayload.every(({ t }) => !t.includes('@@TI_SEG_'))).toBe(true);
 
       document.body.removeChild(container);
     });
@@ -425,20 +432,26 @@ describe('DomTranslatorAdapter Stress and Edge-Case Testing', () => {
       
       getFeatureSemanticBlockGroupingAsync.mockResolvedValueOnce(true);
 
-      // 1. Mock the background LLM processing the grouped payload and returning a valid translated block with session-scoped markers
+      // 1. Mock the background LLM returning one plain translated unit per DOM node.
       contentScriptIntegration.sendTranslationRequest.mockImplementationOnce(async (message) => {
         const payload = JSON.parse(message.data.text);
-        const sessionId = message.data.sessionId;
         
-        expect(payload.length).toBe(1); // Grouped into 1 block
-        expect(payload[0].t).toBe(`Hello@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n2@@beautiful@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n3@@world@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n4@@!`);
+        expect(payload.map(({ i, t, group, part }) => ({ i, t, group, part }))).toEqual([
+          { i: 'n1', t: 'Hello', group: 'g1', part: 0 },
+          { i: 'n2', t: 'beautiful', group: 'g1', part: 1 },
+          { i: 'n3', t: 'world', group: 'g1', part: 2 },
+          { i: 'n4', t: '!', group: 'g1', part: 3 },
+        ]);
 
-        // Translate the block keeping markers perfectly in place
-        const translatedBlock = `درود@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n2@@زیبا@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n3@@جهان@@TI_SEG_${adapter.currentEntropy}_${sessionId}_n4@@!`;
         return {
           success: true,
           streaming: false,
-          translatedText: JSON.stringify([{ t: translatedBlock, i: 'g1' }])
+          translatedText: JSON.stringify([
+            { t: 'درود', i: 'n1' },
+            { t: 'زیبا', i: 'n2' },
+            { t: 'جهان', i: 'n3' },
+            { t: '!', i: 'n4' },
+          ])
         };
       });
 
