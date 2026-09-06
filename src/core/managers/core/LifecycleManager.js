@@ -295,12 +295,12 @@ class LifecycleManager {
    */
   validateHandlerMappings(handlerMappings) {
     const mappedHandlers = new Set(Object.values(handlerMappings));
-    const availableHandlers = Object.values(Handlers);
-    const unmappedHandlers = availableHandlers.filter(handler => !mappedHandlers.has(handler));
+    const unmappedHandlerNames = Object.entries(Handlers)
+      .filter(([, handler]) => typeof handler === 'function' && !mappedHandlers.has(handler))
+      .map(([name]) => name);
     
-    if (unmappedHandlers.length > 0) {
-      logger.warn('Unmapped handlers detected (consider adding to handlerMappings):',
-                   unmappedHandlers.map(h => h.name || 'anonymous'));
+    if (unmappedHandlerNames.length > 0) {
+      logger.warn(`Unmapped handlers detected (consider adding to handlerMappings): ${unmappedHandlerNames.join(', ')}`);
     } else {
       logger.debug('All available handlers are properly mapped');
     }
