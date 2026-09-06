@@ -6,7 +6,7 @@ import { TranslationCallPurpose } from './ProviderConstants.js';
 import { AIConversationHelper } from './utils/AIConversationHelper.js';
 import { CompletionTermination } from '@/features/translation/ir/CompletionContract.js';
 import { createTranslationOperation } from '@/features/translation/ir/TranslationOperation.js';
-import { CONFIG, getDeepSeekApiModelAsync } from '@/shared/config/config.js';
+import { CONFIG, getDeepSeekApiModelAsync, getDeepSeekThinkingModeAsync } from '@/shared/config/config.js';
 import { ResponseFormat } from '@/shared/config/translationConstants.js';
 
 // Mock Dependencies
@@ -22,9 +22,19 @@ vi.mock('@/shared/config/config.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    CONFIG: {
+      ...actual.CONFIG,
+      DEEPSEEK_MODELS: [
+        { value: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsThinking: true },
+        { value: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsThinking: true },
+        { value: 'deepseek-chat', name: 'DeepSeek Chat', supportsThinking: false },
+        { value: 'custom', name: 'Custom Model' },
+      ],
+    },
     getDeepSeekApiKeysAsync: vi.fn().mockResolvedValue(['test-key']),
     getDeepSeekApiUrlAsync: vi.fn().mockResolvedValue('https://api.deepseek.com/chat/completions'),
     getDeepSeekApiModelAsync: vi.fn().mockResolvedValue('deepseek-v4-flash'),
+    getDeepSeekThinkingModeAsync: vi.fn().mockResolvedValue('disabled'),
   };
 });
 
@@ -93,6 +103,8 @@ describe('DeepSeekProvider Error Handling', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getDeepSeekApiModelAsync.mockResolvedValue('deepseek-v4-flash');
+    getDeepSeekThinkingModeAsync.mockResolvedValue('disabled');
     provider = new DeepSeekProvider();
   });
 
@@ -109,7 +121,7 @@ describe('DeepSeekProvider Error Handling', () => {
     expect(result).toBe('DeepSeek Result');
   });
 
-  it.each(['deepseek-v4-flash', 'deepseek-v4-pro'])('builds V4 JSON translation payload for %s', async (model) => {
+  it.each(['deepseek-v4-flash', 'deepseek-v4-pro'])('builds JSON translation payload for thinking-capable model %s', async (model) => {
     getDeepSeekApiModelAsync.mockResolvedValue(model);
     const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
 
@@ -124,6 +136,73 @@ describe('DeepSeekProvider Error Handling', () => {
       thinking: { type: 'disabled' },
       response_format: { type: 'json_object' }
     });
+  });
+
+  it.each([
+    ['disabled', { thinking: { type: 'disabled' } }],
+    ['low', { thinking: { type: 'enabled' }, reasoning_effort: 'low' }],
+    ['high', { thinking: { type: 'enabled' }, reasoning_effort: 'high' }],
+    ['max', { thinking: { type: 'enabled' }, reasoning_effort: 'max' }],
+  ])('maps thinking mode %s for metadata-capable models', async (mode, expectedThinking) => {
+    for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro']) {
+      getDeepSeekApiModelAsync.mockResolvedValue(model);
+      getDeepSeekThinkingModeAsync.mockResolvedValue(mode);
+      const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+
+      await provider._callAI('system', 'source');
+
+      const payload = JSON.parse(executeRequest.mock.calls[0][0].fetchOptions.body);
+      expect(payload).toMatchObject({ model, ...expectedThinking });
+      if (mode === 'disabled') expect(payload).not.toHaveProperty('reasoning_effort');
+      executeRequest.mockRestore();
+    }
+  });
+
+  it('keeps JSON response format alongside enabled thinking', async () => {
+    getDeepSeekApiModelAsync.mockResolvedValue('deepseek-v4-pro');
+    getDeepSeekThinkingModeAsync.mockResolvedValue('high');
+    const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+
+    await provider._callAI('system', 'source', { expectedFormat: ResponseFormat.JSON_OBJECT });
+
+    const payload = JSON.parse(executeRequest.mock.calls[0][0].fetchOptions.body);
+    expect(payload).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'high',
+      response_format: { type: 'json_object' },
+    });
+  });
+
+  it('disables thinking conservatively for arbitrary models', async () => {
+    getDeepSeekApiModelAsync.mockResolvedValue('custom-deepseek-model');
+    getDeepSeekThinkingModeAsync.mockResolvedValue('max');
+    const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+
+    await provider._callAI('system', 'source');
+
+    const payload = JSON.parse(executeRequest.mock.calls[0][0].fetchOptions.body);
+    expect(payload.thinking).toEqual({ type: 'disabled' });
+    expect(payload).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('enables thinking only when model metadata explicitly supports it', async () => {
+    for (const [model, expectedThinking] of [
+      ['deepseek-v4-flash', true],
+      ['deepseek-v4-pro', true],
+      ['deepseek-chat', false],
+    ]) {
+      getDeepSeekApiModelAsync.mockResolvedValue(model);
+      getDeepSeekThinkingModeAsync.mockResolvedValue('high');
+      const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+
+      await provider._callAI('system', 'source');
+
+      const payload = JSON.parse(executeRequest.mock.calls[0][0].fetchOptions.body);
+      expect(payload.thinking).toEqual({ type: expectedThinking ? 'enabled' : 'disabled' });
+      if (expectedThinking) expect(payload.reasoning_effort).toBe('high');
+      else expect(payload).not.toHaveProperty('reasoning_effort');
+      executeRequest.mockRestore();
+    }
   });
 
   it('uses CONFIG default for missing text model selection', async () => {

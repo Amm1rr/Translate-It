@@ -16,7 +16,8 @@ import {
   getPromptBASEScreenCaptureAsync,
   getPromptAsync,
   getPromptBASEFieldAsync,
-  getGeminiThinkingModeAsync
+  getGeminiThinkingModeAsync,
+  getDeepSeekThinkingModeAsync
 } from './config.js';
 import { storageManager } from '../storage/core/StorageCore.js';
 
@@ -112,10 +113,29 @@ describe('Config Module', () => {
     it('should expose approved DeepSeek text models in order', () => {
       expect(CONFIG.DEEPSEEK_API_MODEL).toBe('deepseek-v4-flash');
       expect(CONFIG.DEEPSEEK_API_URL).toBe('https://api.deepseek.com/chat/completions');
-      expect(CONFIG.DEEPSEEK_MODELS.map(model => model.value)).toEqual([
-        'deepseek-v4-flash',
-        'deepseek-v4-pro',
-        'custom'
+      expect(CONFIG.DEEPSEEK_THINKING_MODE).toBe('disabled');
+      expect(CONFIG.DEEPSEEK_THINKING_MODE_OPTIONS.map(option => option.value)).toEqual([
+        'disabled',
+        'low',
+        'high',
+        'max'
+      ]);
+      expect(CONFIG.DEEPSEEK_MODELS).toEqual([
+        {
+          value: 'deepseek-v4-flash',
+          name: 'DeepSeek V4 Flash',
+          supportsThinking: true
+        },
+        {
+          value: 'deepseek-v4-pro',
+          name: 'DeepSeek V4 Pro',
+          supportsThinking: true
+        },
+        {
+          value: 'custom',
+          name: 'Custom Model',
+          supportsThinking: false
+        }
       ]);
       expect(CONFIG.DEEPSEEK_MODELS).not.toEqual(
         expect.arrayContaining([
@@ -237,6 +257,14 @@ describe('Config Module', () => {
   });
 
   describe('Async Getters', () => {
+    it('getDeepSeekThinkingModeAsync reads stored mode and uses CONFIG default', async () => {
+      storageManager.get.mockResolvedValue({ DEEPSEEK_THINKING_MODE: 'high' });
+      await expect(getDeepSeekThinkingModeAsync()).resolves.toBe('high');
+      expect(storageManager.get).toHaveBeenCalledWith({
+        DEEPSEEK_THINKING_MODE: CONFIG.DEEPSEEK_THINKING_MODE
+      });
+    });
+
     it('getGeminiThinkingModeAsync reads stored mode and uses CONFIG default', async () => {
       storageManager.get.mockResolvedValue({ GEMINI_THINKING_MODE: 'minimal' });
       await expect(getGeminiThinkingModeAsync()).resolves.toBe('minimal');

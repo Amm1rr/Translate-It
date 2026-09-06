@@ -38,7 +38,7 @@
 - **Google Gemini:** تغییر `API URL` برای استفاده از مدل‌های مختلف (مثلاً `gemini-2.0-flash`).
 - **OpenAI:** وارد کردن نام مدل‌های خاص مانند `gpt-4o` یا `gpt-3.5-turbo`.
 - **OpenRouter:** پشتیبانی از مدل‌های متنوع؛ نام مدل را از [مستندات OpenRouter](https://openrouter.ai/models) کپی کنید.
-- **DeepSeek:** شخصی‌سازی مدل مطابق [مستندات DeepSeek](https://api-docs.deepseek.com/api/list-models/).
+- **DeepSeek:** شخصی‌سازی مدل مطابق [مستندات DeepSeek](https://api-docs.deepseek.com/api/list-models/)؛ امکان تنظیم سطح تفکر نیز وجود دارد.
 - **DeepL:** تنظیم سطح API (رایگان یا پرو) و تنظیمات لحن ترجمه (formality).
 - **سفارشی (سازگار با OpenAI):** اتصال به مدل‌های میزبانی شده توسط خودتان (مثل **Ollama**) یا هر سرویس سازگار با OpenAI با وارد کردن `API URL` و نام مدل.
 
@@ -49,4 +49,4 @@
 اگر مدلی را مشخص نکنید، مدل‌های زیر به صورت پیش‌فرض استفاده می‌شوند:
 - **OpenAI / OpenRouter:** `gpt-3.5-turbo`
 - **Google Gemini / WebAI to API:** `gemini-1.5-flash`
-- **DeepSeek:** `deepseek-chat`
+- **DeepSeek:** `deepseek-v4-flash`

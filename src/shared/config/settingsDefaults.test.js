@@ -30,6 +30,7 @@ describe('getPersistedDefaultSettings', () => {
     expect(defaults.OPENAI_API_MODEL).toBe(CONFIG.OPENAI_API_MODEL);
     expect(defaults.OPENAI_MODELS).toEqual(CONFIG.OPENAI_MODELS);
     expect(defaults.DEEPSEEK_API_MODEL).toBe(CONFIG.DEEPSEEK_API_MODEL);
+    expect(defaults.DEEPSEEK_THINKING_MODE).toBe(CONFIG.DEEPSEEK_THINKING_MODE);
     expect(defaults.DEEPSEEK_MODELS).toEqual(CONFIG.DEEPSEEK_MODELS);
     expect(defaults.OPENROUTER_API_MODEL).toBe(CONFIG.OPENROUTER_API_MODEL);
     expect(defaults.OPENROUTER_MODELS).toEqual(CONFIG.OPENROUTER_MODELS);

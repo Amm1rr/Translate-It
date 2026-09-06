@@ -238,35 +238,54 @@ describe('Settings Migrations', () => {
   });
 
   it.each([
-    ['deepseek-chat', 'deepseek-v4-flash'],
-    ['deepseek-reasoner', 'deepseek-v4-pro']
-  ])('migrates inactive DeepSeek model %s to %s', async (oldModel, newModel) => {
+    ['deepseek-chat', 'deepseek-v4-flash', 'disabled'],
+    ['deepseek-reasoner', 'deepseek-v4-flash', 'high']
+  ])('migrates inactive DeepSeek model %s to %s with %s thinking', async (oldModel, newModel, thinkingMode) => {
     const { updates, logs } = await runSettingsMigrations({
       DEEPSEEK_MODELS: [{ value: oldModel, label: 'Legacy' }],
       DEEPSEEK_API_MODEL: oldModel
     });
 
     expect(updates.DEEPSEEK_API_MODEL).toBe(newModel);
+    expect(updates.DEEPSEEK_THINKING_MODE).toBe(thinkingMode);
     expect(logs).toContain(`Migrated DEEPSEEK_API_MODEL from ${oldModel} to ${newModel}`);
+  });
+
+  it.each([
+    ['deepseek-chat', 'disabled'],
+    ['deepseek-reasoner', 'high']
+  ])('migrates legacy DeepSeek model %s without stored model list', async (oldModel, thinkingMode) => {
+    const { updates } = await runSettingsMigrations({
+      DEEPSEEK_API_MODEL: oldModel
+    });
+
+    expect(updates.DEEPSEEK_API_MODEL).toBe('deepseek-v4-flash');
+    expect(updates.DEEPSEEK_THINKING_MODE).toBe(thinkingMode);
   });
 
   it('preserves current DeepSeek models and arbitrary custom IDs', async () => {
     const currentFlash = await runSettingsMigrations({
       DEEPSEEK_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
-      DEEPSEEK_API_MODEL: 'deepseek-v4-flash'
+      DEEPSEEK_API_MODEL: 'deepseek-v4-flash',
+      DEEPSEEK_THINKING_MODE: 'low'
     });
     const currentPro = await runSettingsMigrations({
       DEEPSEEK_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
-      DEEPSEEK_API_MODEL: 'deepseek-v4-pro'
+      DEEPSEEK_API_MODEL: 'deepseek-v4-pro',
+      DEEPSEEK_THINKING_MODE: 'high'
     });
     const custom = await runSettingsMigrations({
       DEEPSEEK_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
-      DEEPSEEK_API_MODEL: 'provider/custom-model'
+      DEEPSEEK_API_MODEL: 'provider/custom-model',
+      DEEPSEEK_THINKING_MODE: 'max'
     });
 
     expect(currentFlash.updates.DEEPSEEK_API_MODEL).toBeUndefined();
     expect(currentPro.updates.DEEPSEEK_API_MODEL).toBeUndefined();
     expect(custom.updates.DEEPSEEK_API_MODEL).toBeUndefined();
+    expect(currentFlash.updates.DEEPSEEK_THINKING_MODE).toBeUndefined();
+    expect(currentPro.updates.DEEPSEEK_THINKING_MODE).toBeUndefined();
+    expect(custom.updates.DEEPSEEK_THINKING_MODE).toBeUndefined();
   });
 
   it('falls back to the DeepSeek V4 Flash default for an empty selection', async () => {

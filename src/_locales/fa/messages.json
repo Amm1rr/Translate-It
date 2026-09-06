@@ -1137,7 +1137,25 @@
     "message": "مدل"
   },
   "deepseek_api_model_placeholder": {
-    "message": "مدل DeepSeek را وارد کنید (مثلا: deepseek-chat)"
+    "message": "مدل DeepSeek را وارد کنید (مثلا: deepseek-v4-flash)"
+  },
+  "deepseek_thinking_mode_label": {
+    "message": "حالت تفکر"
+  },
+  "deepseek_thinking_mode_disabled": {
+    "message": "غیرفعال"
+  },
+  "deepseek_thinking_mode_low": {
+    "message": "کم"
+  },
+  "deepseek_thinking_mode_high": {
+    "message": "زیاد"
+  },
+  "deepseek_thinking_mode_max": {
+    "message": "حداکثر"
+  },
+  "deepseek_thinking_mode_description": {
+    "message": "میزان استدلال DeepSeek را کنترل می‌کند."
   },
   "deepl_api_settings_title": {
     "message": "تنظیمات API DeepL"

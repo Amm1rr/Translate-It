@@ -215,10 +215,17 @@ export const CONFIG = {
   DEEPSEEK_API_KEY: "",
   DEEPSEEK_API_URL: "https://api.deepseek.com/chat/completions",
   DEEPSEEK_API_MODEL: "deepseek-v4-flash",
+  DEEPSEEK_THINKING_MODE: "disabled",
+  DEEPSEEK_THINKING_MODE_OPTIONS: [
+    { value: "disabled", name: "Disabled" },
+    { value: "low", name: "Low" },
+    { value: "high", name: "High" },
+    { value: "max", name: "Max" }
+  ],
   DEEPSEEK_MODELS: [
-    { value: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-    { value: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-    { value: "custom", name: "Custom Model" }
+    { value: "deepseek-v4-flash", name: "DeepSeek V4 Flash", supportsThinking: true },
+    { value: "deepseek-v4-pro", name: "DeepSeek V4 Pro", supportsThinking: true },
+    { value: "custom", name: "Custom Model", supportsThinking: false }
   ],
   CUSTOM_API_URL: "",
   CUSTOM_API_KEY: "",
@@ -1044,6 +1051,10 @@ export const getDeepSeekApiKeyAsync = async () => {
 
 export const getDeepSeekApiModelAsync = async () => {
   return getSettingValueAsync("DEEPSEEK_API_MODEL", CONFIG.DEEPSEEK_API_MODEL);
+};
+
+export const getDeepSeekThinkingModeAsync = async () => {
+  return getSettingValueAsync("DEEPSEEK_THINKING_MODE", CONFIG.DEEPSEEK_THINKING_MODE);
 };
 
 export const getDeepSeekApiUrlAsync = async () => {

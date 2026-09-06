@@ -34,6 +34,28 @@
       />
     </div>
     <div
+      v-if="showDeepseekThinkingMode"
+      class="setting-group vertical"
+    >
+      <label for="deepseek-thinking-mode">
+        {{ t('deepseek_thinking_mode_label') || 'Thinking Mode' }}
+      </label>
+      <BaseSelect
+        id="deepseek-thinking-mode"
+        v-model="deepseekThinkingMode"
+        :options="deepseekThinkingModeOptions"
+        class="thinking-mode-select"
+        :style="rtlSelectStyle"
+        aria-describedby="deepseek-thinking-mode-description"
+      />
+      <p
+        id="deepseek-thinking-mode-description"
+        class="setting-description"
+      >
+        {{ t('deepseek_thinking_mode_description') || 'Controls how much reasoning DeepSeek uses. This setting does not change the selected model.' }}
+      </p>
+    </div>
+    <div
       v-if="selectedModelOption === 'custom'"
       class="setting-group vertical"
     >
@@ -110,6 +132,22 @@ const deepseekApiModelOptions = computed(() => {
     label: model.name || model.value
   }))
 })
+
+const deepseekThinkingMode = computed({
+  get: () => settingsStore.settings?.DEEPSEEK_THINKING_MODE || 'disabled',
+  set: (value) => settingsStore.updateSettingLocally('DEEPSEEK_THINKING_MODE', value)
+})
+
+const deepseekThinkingModeOptions = computed(() =>
+  CONFIG.DEEPSEEK_THINKING_MODE_OPTIONS.map(option => ({
+    value: option.value,
+    label: t(`deepseek_thinking_mode_${option.value}`) || option.name
+  }))
+)
+
+const showDeepseekThinkingMode = computed(() =>
+  CONFIG.DEEPSEEK_MODELS.find(({ value }) => value === selectedModelOption.value)?.supportsThinking === true
+)
 
 // Test keys functionality
 const testingKeys = ref(false)

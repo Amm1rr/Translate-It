@@ -1134,7 +1134,25 @@
     "message": "モデル"
   },
   "deepseek_api_model_placeholder": {
-    "message": "DeepSeekモデルを入力（例：deepseek-chat）"
+    "message": "DeepSeekモデルを入力（例：deepseek-v4-flash）"
+  },
+  "deepseek_thinking_mode_label": {
+    "message": "思考モード"
+  },
+  "deepseek_thinking_mode_disabled": {
+    "message": "無効"
+  },
+  "deepseek_thinking_mode_low": {
+    "message": "低"
+  },
+  "deepseek_thinking_mode_high": {
+    "message": "高"
+  },
+  "deepseek_thinking_mode_max": {
+    "message": "最大"
+  },
+  "deepseek_thinking_mode_description": {
+    "message": "DeepSeekの推論量を調整します。"
   },
   "deepl_api_settings_title": {
     "message": "DeepL API 設定"
