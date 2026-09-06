@@ -35,6 +35,30 @@ import { createManifestView, createRequestUnitManifest } from '@/features/transl
 import { TRANSLATION_BATCH_EXECUTION_TIMEOUT_MS } from '@/shared/constants/translation.js';
 import { TranslationCallPurpose } from '@/features/translation/providers/ProviderConstants.js';
 import { AIResponseParser } from '@/features/translation/providers/utils/AIResponseParser.js';
+import { BaseAIProvider } from '@/features/translation/providers/BaseAIProvider.js';
+import { AIStreamManager } from '@/features/translation/providers/utils/AIStreamManager.js';
+
+class SeamAIProvider extends BaseAIProvider {
+  constructor() {
+    super('SeamAI');
+  }
+
+  async getSupportsStreaming() {
+    return true;
+  }
+
+  async getBatchStrategy() {
+    return 'smart';
+  }
+
+  async getBatchingConfig() {
+    return { strategy: 'single', characterLimit: 5000 };
+  }
+
+  async _translateBatch(texts) {
+    return texts.map((text) => `translated:${text}`);
+  }
+}
 
 // Mock dependencies
 vi.mock('@/shared/logging/logger.js', () => ({
@@ -74,7 +98,10 @@ vi.mock('@/features/translation/core/ProviderConfigurations.js', async (importOr
 });
 
 vi.mock('@/features/translation/core/QueueManager.js', () => ({
-  queueManager: { cancelByMessageId: queueCancelMock }
+  queueManager: {
+    cancelByMessageId: queueCancelMock,
+    enqueue: vi.fn(async (_providerName, task) => task()),
+  }
 }));
 
 vi.mock('@/shared/config/config.js', () => ({
@@ -1988,6 +2015,63 @@ describe('OptimizedJsonHandler', () => {
       expect(mockProvider.translate).toHaveBeenCalledTimes(2);
       // Second call should use 'fr'
       expect(mockProvider.translate.mock.calls[1][1]).toBe('fr');
+    });
+
+    it('marks OJH ownership while publishing canonical structured results once', async () => {
+      const browser = (await import('webextension-polyfill')).default;
+      browser.tabs.sendMessage.mockClear();
+      mockEngine.createIntelligentBatches = vi.fn((segments) => [segments]);
+      mockProvider.translate.mockResolvedValueOnce({ translatedText: ['t1', 't2'] });
+
+      const result = await handler.execute(
+        mockEngine,
+        { ...mockData, sourceLanguage: 'en' },
+        mockProvider,
+        'en',
+        'fa',
+        'msg-ojh-publication-owner',
+        mockSender,
+      );
+
+      expect(result.results).toEqual(['t1', 't2']);
+      expect(mockProvider.translate.mock.calls[0][3].executionContext).toMatchObject({
+        resultPublicationOwner: 'optimized-json-handler',
+      });
+      const updates = browser.tabs.sendMessage.mock.calls
+        .map(([, message]) => message)
+        .filter((message) => message.action === MessageActions.TRANSLATION_STREAM_UPDATE);
+      expect(updates).toHaveLength(1);
+    });
+
+    it('suppresses BaseAIProvider intermediate publication while OJH publishes once', async () => {
+      const browser = (await import('webextension-polyfill')).default;
+      browser.tabs.sendMessage.mockClear();
+      mockEngine.createIntelligentBatches = vi.fn((segments) => [segments]);
+      mockEngine.getAbortController = vi.fn(() => mockAbortController);
+      const provider = new SeamAIProvider();
+      const activeSpy = vi.spyOn(AIStreamManager, 'isStreamActive').mockReturnValue(true);
+      const intermediateSpy = vi.spyOn(AIStreamManager, 'streamBatchResults').mockResolvedValue(undefined);
+
+      try {
+        const result = await handler.execute(
+          mockEngine,
+          { ...mockData, sourceLanguage: 'en' },
+          provider,
+          'en',
+          'fa',
+          'msg-ojh-base-provider-seam',
+          mockSender,
+        );
+        expect(result.results).toEqual(['translated:s1', 'translated:s2']);
+        expect(intermediateSpy).not.toHaveBeenCalled();
+        const updates = browser.tabs.sendMessage.mock.calls
+          .map(([, message]) => message)
+          .filter((message) => message.action === MessageActions.TRANSLATION_STREAM_UPDATE);
+        expect(updates).toHaveLength(1);
+      } finally {
+        activeSpy.mockRestore();
+        intermediateSpy.mockRestore();
+      }
     });
 
     it('preserves grouped Select Element units and resolves parent ownership from b', async () => {

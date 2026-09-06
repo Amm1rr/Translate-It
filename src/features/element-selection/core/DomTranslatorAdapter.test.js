@@ -178,6 +178,19 @@ describe('DomTranslatorAdapter', () => {
     expect(adapter.originalSettings).toEqual({ source: 'en', target: 'fa' });
   });
 
+  it('logs rejected mapping fields as one readable warning string', () => {
+    adapter._logRejectedMapping(4, 'uid-4', 'wrong-parent');
+
+    expect(adapter.logger.warn).toHaveBeenCalledTimes(1);
+    const [message, ...extraArguments] = adapter.logger.warn.mock.calls[0];
+    expect(typeof message).toBe('string');
+    expect(message).toContain('reason=wrong-parent');
+    expect(message).toContain('resultIndex=4');
+    expect(message).toContain('identityPresent=true');
+    expect(message).toContain('identityKnown=true');
+    expect(extraArguments).toHaveLength(0);
+  });
+
   describe('translateElement', () => {
     it('should initiate a translation request', async () => {
       const onProgress = vi.fn();

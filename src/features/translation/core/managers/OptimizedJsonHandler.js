@@ -23,6 +23,7 @@ import { findProviderById } from '@/features/translation/providers/ProviderManif
 import { resolveOperationSourceLanguage } from '@/features/translation/core/OperationSourceLanguageResolver.js';
 
 const logger = getScopedLogger(LOG_COMPONENTS.TRANSLATION, 'OptimizedJsonHandler');
+const OJH_RESULT_PUBLICATION_OWNER = 'optimized-json-handler';
 const MAX_PARENT_RECOVERIES_PER_BATCH = 2;
 const GENERIC_TRANSLATION_ERROR_TYPES = new Set([
   ErrorTypes.TRANSLATION_ERROR,
@@ -1056,9 +1057,13 @@ const parentError = createParentValidationError(parentIdStr, sourceText, transla
               ...(useParentConversationLifecycle && { useParentConversationLifecycle: true }),
               ...(groupedUnitTransport && { preserveBatchUnitObjects: true }),
             };
-          batchExecutionContext = hasManifestMembership
-            ? self._createBatchExecutionContext(operationExecutionContext, batch)
-            : operationExecutionContext;
+          batchExecutionContext = {
+            ...(hasManifestMembership
+              ? self._createBatchExecutionContext(operationExecutionContext, batch)
+              : operationExecutionContext),
+            // OJH publishes accepted structured results through publishResults.
+            resultPublicationOwner: OJH_RESULT_PUBLICATION_OWNER,
+          };
           const providerPromise = self._performBatchCall(
               providerInstance, 
               batchPayload, 

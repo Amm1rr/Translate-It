@@ -4,6 +4,8 @@ const registeredHandlers = new Map()
 const registerHandlerMock = vi.fn((action, handler) => registeredHandlers.set(action, handler))
 const translateTextHandler = vi.fn()
 const settingsUpdatedHandler = vi.fn()
+const loggerWarnMock = vi.hoisted(() => vi.fn())
+const loggerDebugMock = vi.hoisted(() => vi.fn())
 
 vi.mock('webextension-polyfill', () => ({ default: {} }))
 vi.mock('@/core/background/feature-loader.js', () => ({ featureLoader: {} }))
@@ -14,15 +16,17 @@ vi.mock('@/shared/messaging/core/MessageHandler.js', () => ({
 vi.mock('@/core/background/handlers/index.js', async (importOriginal) => ({
   ...await importOriginal(),
   handleTranslateTextLazy: translateTextHandler,
-  handleSettingsUpdatedLazy: settingsUpdatedHandler
+  handleSettingsUpdatedLazy: settingsUpdatedHandler,
+  handlerNamespaceMetadata: { source: 'test' }
 }))
 vi.mock('@/shared/logging/logger.js', () => ({
-  getScopedLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })
+  getScopedLogger: () => ({ debug: loggerDebugMock, info: vi.fn(), warn: loggerWarnMock, error: vi.fn() })
 }))
 vi.mock('@/core/browserHandlers.js', () => ({ addBrowserSpecificHandlers: vi.fn() }))
 vi.mock('@/utils/UtilsFactory.js', () => ({ utilsFactory: {} }))
 
 const { MessageActions } = await import('@/shared/messaging/core/MessageActions.js')
+const Handlers = await import('@/core/background/handlers/index.js')
 const { LifecycleManager } = await import('./LifecycleManager.js')
 
 describe('LifecycleManager translation text routing', () => {
@@ -94,6 +98,48 @@ describe('LifecycleManager legacy Select Element handler removal', () => {
     for (const name of LAZY_SELECT_ELEMENT_HANDLERS) {
       expect(mappedHandlers.has(Handlers[name])).toBe(true)
     }
+  })
+})
+
+describe('LifecycleManager handler mapping validation', () => {
+  beforeEach(() => {
+    loggerWarnMock.mockClear()
+    loggerDebugMock.mockClear()
+  })
+
+  it('ignores non-function namespace exports', () => {
+    const firstFunction = Object.values(Handlers).find((handler) => typeof handler === 'function')
+    const manager = new LifecycleManager()
+
+    manager.validateHandlerMappings({ mapped: firstFunction })
+
+    expect(loggerWarnMock).toHaveBeenCalledTimes(1)
+    expect(loggerWarnMock.mock.calls[0][0]).not.toContain('handlerNamespaceMetadata')
+  })
+
+  it('warns with unmapped function export names as one string argument', () => {
+    const manager = new LifecycleManager()
+
+    manager.validateHandlerMappings({})
+
+    expect(loggerWarnMock).toHaveBeenCalledTimes(1)
+    const [message, ...extraArguments] = loggerWarnMock.mock.calls[0]
+    expect(message).toContain('Unmapped handlers detected (consider adding to handlerMappings):')
+    expect(message).toContain('handleTranslateTextLazy')
+    expect(extraArguments).toHaveLength(0)
+  })
+
+  it('does not warn when all function exports are mapped', () => {
+    const allFunctionMappings = Object.fromEntries(
+      Object.entries(Handlers)
+        .filter(([, handler]) => typeof handler === 'function')
+        .map(([name, handler]) => [name, handler])
+    )
+    const manager = new LifecycleManager()
+
+    manager.validateHandlerMappings(allFunctionMappings)
+
+    expect(loggerWarnMock).not.toHaveBeenCalled()
   })
 })
 
