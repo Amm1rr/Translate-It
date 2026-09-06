@@ -20,7 +20,6 @@ export * from "./lazy/handleTTSLazy.js";
 
 // Element selection handlers - Lazy loaded for better performance
 export * from "./lazy/handleElementSelectionLazy.js";
-export * from "./selection/handleSelectElement.js";
 
 // Screen capture handlers - Lazy loaded for better performance
 export * from "./lazy/handleScreenCaptureLazy.js";
