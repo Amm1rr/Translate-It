@@ -16,5 +16,8 @@ tests/coverage/
 .agent/
 .gemini/
 .mimocode/
-#openspec/
+.kilo/
+.continue/
+.qwen/
 skills-lock.json
+#openspec/
