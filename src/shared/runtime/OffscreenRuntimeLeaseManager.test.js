@@ -81,7 +81,7 @@ describe('OffscreenRuntimeLeaseManager', () => {
     expect(browser.offscreen.createDocument).toHaveBeenCalledTimes(1);
     expect(browser.offscreen.createDocument).toHaveBeenCalledWith({
       url: OFFSCREEN_RUNTIME_CONFIG.url,
-      reasons: ['AUDIO_PLAYBACK', 'WORKERS', 'USER_MEDIA'],
+      reasons: ['AUDIO_PLAYBACK', 'WORKERS', 'USER_MEDIA', 'WEB_RTC'],
       justification: OFFSCREEN_RUNTIME_CONFIG.justification,
     });
     expect(manager.getSnapshot().leases).toEqual([
@@ -660,5 +660,7 @@ describe('OffscreenRuntimeLeaseManager', () => {
 
     expect(manager._supportsReasons(browser, ['AUDIO_PLAYBACK'])).toBe(true);
     expect(manager._supportsReasons(browser, ['AUDIO_PLAYBACK', 'USER_MEDIA'])).toBe(false);
+    expect(manager._supportsReasons(browser, ['WEB_RTC'])).toBe(true);
+    expect(manager._supportsReasons(browser, ['AUDIO_PLAYBACK', 'WEB_RTC'])).toBe(false);
   });
 });
