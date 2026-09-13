@@ -1,5 +1,6 @@
 import {
   LIVE_DUBBING_ACTIONS,
+  LIVE_DUBBING_AUDIO_MODES,
   LIVE_DUBBING_CAPTURE_STAGES,
   LIVE_DUBBING_PROVIDER_ID,
   LIVE_DUBBING_STATUS,
@@ -499,6 +500,18 @@ export function normalizeProviderTargetLanguage(providerId, language) {
   }
 
   return exact;
+}
+
+/**
+ * Whether a provider audio mode is a supported live-dubbing audio path.
+ * Anything else (including non-strings) fails closed at the registry and
+ * controller boundaries.
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isLiveDubbingAudioMode(value) {
+  return value === LIVE_DUBBING_AUDIO_MODES.PCM
+    || value === LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM;
 }
 
 /**

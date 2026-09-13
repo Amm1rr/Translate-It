@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LiveDubbingController } from './LiveDubbingController.js';
 import {
   LIVE_DUBBING_ACTIONS,
+  LIVE_DUBBING_AUDIO_MODES,
   LIVE_DUBBING_INTERNAL_STATUS,
   LIVE_DUBBING_STATUS,
 } from '../constants.js';
@@ -1033,6 +1034,443 @@ describe('LiveDubbingController', () => {
       }),
     }));
     expect(provider.close).toHaveBeenCalledOnce();
+
+    await controller.dispose('session-1', 'gemini');
+  });
+});
+
+describe('LiveDubbingController media-stream audio path', () => {
+  function createMediaStreamHarness({
+    makeClient,
+    registryMode = LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM,
+    controllerOptions = {},
+    targetLanguage = 'fr',
+  } = {}) {
+    const track = new FakeTrack();
+    const stream = createStream(track);
+    const accepted = vi.fn();
+    const notify = vi.fn();
+    const clients = [];
+    let providerCallbacks;
+    const registry = {
+      // Mirrors the real registry signature: create(providerId, options).
+      create: vi.fn((providerId, options) => {
+        expect(providerId).toBe('gemini');
+        providerCallbacks = options.callbacks;
+        const client = makeClient
+          ? makeClient(providerCallbacks)
+          : {
+            connect: vi.fn(async () => providerCallbacks.onSetupComplete()),
+            dispose: vi.fn(async () => {}),
+          };
+        clients.push(client);
+        return client;
+      }),
+      getAudioMode: vi.fn(() => registryMode),
+    };
+    const controller = new LiveDubbingController({
+      mediaDevices: { getUserMedia: vi.fn(async () => stream) },
+      providerRegistry: registry,
+      requestBootstrap: vi.fn().mockResolvedValue({
+        success: true,
+        providerId: 'gemini',
+        targetLanguage,
+        bootstrap: { accessToken: 'test-token' },
+      }),
+      onPlaybackAccepted: accepted,
+      notify,
+      ...controllerOptions,
+    });
+    return {
+      controller,
+      track,
+      stream,
+      registry,
+      clients,
+      accepted,
+      notify,
+      callbacks: () => providerCallbacks,
+    };
+  }
+
+  it('drives a media-stream provider without local pipelines', async () => {
+    const inputPipelineFactory = vi.fn();
+    const outputPlayerFactory = vi.fn();
+    const { controller, track, stream, registry, clients, accepted, callbacks } = createMediaStreamHarness({
+      controllerOptions: { inputPipelineFactory, outputPlayerFactory },
+    });
+
+    const prepared = controller.prepare('session-1', 'gemini', 'fr', 0);
+    expect(prepared.success).toBe(true);
+    expect(controller.currentSession.audioMode).toBe(LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM);
+    expect(registry.getAudioMode).toHaveBeenCalledOnce();
+    const repeatedPrepare = controller.prepare('session-1', 'gemini', 'fr', 0);
+    expect(repeatedPrepare).toMatchObject({ success: true, ready: true });
+    expect(controller.currentSession.audioMode).toBe(LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM);
+    expect(registry.getAudioMode).toHaveBeenCalledOnce();
+    const captured = await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    expect(captured).toMatchObject({
+      ack: 'MEDIA_ACQUIRED',
+      status: LIVE_DUBBING_STATUS.CONNECTING_PROVIDER,
+      audioPathReady: true,
+      // Truthful: no local pipelines exist in media-stream mode; the
+      // generic audioPathReady alone carries readiness.
+      inputPipelineReady: false,
+      outputPipelineReady: false,
+      captureReady: true,
+    });
+    expect(controller.currentSession.audioMode).toBe(LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM);
+    expect(controller.currentSession.inputPipeline).toBeNull();
+    expect(controller.currentSession.outputPlayer).toBeNull();
+    expect(registry.getAudioMode).toHaveBeenCalledOnce();
+    expect(inputPipelineFactory).not.toHaveBeenCalled();
+    expect(outputPlayerFactory).not.toHaveBeenCalled();
+
+    const connected = await controller.connectProvider('session-1', 'gemini', 'fr', 2);
+    expect(connected).toMatchObject({
+      ack: 'PROVIDER_READY',
+      status: LIVE_DUBBING_STATUS.RUNNING,
+      audioPathReady: true,
+      inputPipelineReady: false,
+      outputPipelineReady: false,
+      setupComplete: true,
+    });
+    expect(registry.create).toHaveBeenCalledOnce();
+    const mediaClient = clients[0];
+    expect(mediaClient.connect).toHaveBeenCalledOnce();
+    const connectInput = mediaClient.connect.mock.calls[0][0];
+    expect(connectInput.sourceStream).toBe(stream);
+    expect(connectInput).not.toHaveProperty('streamId');
+    expect(connectInput.bootstrap).toEqual({ accessToken: 'test-token' });
+    expect(mediaClient.sendAudio).toBeUndefined();
+
+    // The PCM pending queue stays inert even when poked directly.
+    controller._handleInputFrame(controller.currentSession, {
+      buffer: new ArrayBuffer(2),
+      sampleCount: 1,
+      sampleRate: 16_000,
+    });
+    expect(controller.getTelemetry()).toMatchObject({ inputFrames: 0, inputSentFrames: 0 });
+
+    // Provider-managed playback acceptance keeps milestone semantics.
+    // inputReady/outputReady stay null: they describe local PCM graph
+    // starts, and media-stream readiness is audioPathReady alone.
+    expect(controller.getTelemetry().milestones.inputReady).toBeNull();
+    expect(controller.getTelemetry().milestones.outputReady).toBeNull();
+    callbacks().onPlaybackAccepted({ accepted: true, sampleCount: 480 });
+    expect(controller.getTelemetry().milestones.firstTranslatedAudioAcceptedByPlayback)
+      .toEqual(expect.any(Number));
+    expect(accepted).toHaveBeenCalledWith({ accepted: true, sampleCount: 480 });
+
+    expect(controller.status()).toMatchObject({
+      active: true,
+      status: LIVE_DUBBING_STATUS.RUNNING,
+      audioPathReady: true,
+      inputPipelineReady: false,
+      outputPipelineReady: false,
+      captureReady: true,
+    });
+
+    await controller.dispose('session-1', 'gemini');
+    expect(mediaClient.dispose).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+
+    await controller.dispose('session-1', 'gemini');
+    expect(mediaClient.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('awaits async provider dispose and fences late callbacks', async () => {
+    let resolveDispose;
+    const { controller, track, clients, callbacks } = createMediaStreamHarness({
+      makeClient: (clientCallbacks) => ({
+        connect: vi.fn(async () => clientCallbacks.onSetupComplete()),
+        dispose: vi.fn(() => new Promise(resolve => { resolveDispose = resolve; })),
+      }),
+    });
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    await controller.connectProvider('session-1', 'gemini', 'fr', 2);
+
+    const stopped = controller.dispose('session-1', 'gemini');
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+
+    // Late provider callbacks while dispose is in flight are fenced.
+    callbacks().onPlaybackAccepted({ accepted: true, sampleCount: 1 });
+    callbacks().onAudio(new Uint8Array([1]));
+    expect(controller.getTelemetry().milestones.firstTranslatedAudioAcceptedByPlayback).toBeNull();
+    expect(controller.getTelemetry()).toMatchObject({ translatedAudioChunks: 0 });
+
+    resolveDispose();
+    await expect(stopped).resolves.toMatchObject({ ack: 'DISPOSED' });
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+  });
+
+  it('ignores late provider callbacks after disposal', async () => {
+    const { controller, track, clients, accepted, notify, callbacks } = createMediaStreamHarness();
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    await controller.connectProvider('session-1', 'gemini', 'fr', 2);
+    await controller.dispose('session-1', 'gemini');
+
+    expect(() => {
+      callbacks().onSetupComplete();
+      callbacks().onPlaybackAccepted({ accepted: true });
+      callbacks().onError(new Error('late'));
+      callbacks().onClose({ code: 1000 });
+    }).not.toThrow();
+    expect(notify).not.toHaveBeenCalled();
+    expect(accepted).not.toHaveBeenCalled();
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(controller.getTelemetry().milestones.firstTranslatedAudioAcceptedByPlayback).toBeNull();
+  });
+
+  it('stops a pending provider connection without publishing', async () => {
+    let resolveConnect;
+    const { controller, track, clients } = createMediaStreamHarness({
+      makeClient: () => ({
+        connect: vi.fn(() => new Promise(resolve => { resolveConnect = resolve; })),
+        dispose: vi.fn(async () => {}),
+      }),
+    });
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    const connecting = controller.connectProvider('session-1', 'gemini', 'fr', 2);
+    await vi.waitFor(() => expect(clients[0].connect).toHaveBeenCalledOnce());
+
+    await controller.dispose('session-1', 'gemini');
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+
+    resolveConnect();
+    await expect(connecting).resolves.toMatchObject({ success: false, ignored: true });
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it('restarts with a fresh session after dispose', async () => {
+    const track1 = new FakeTrack();
+    const track2 = new FakeTrack();
+    const { controller, clients } = createMediaStreamHarness({
+      controllerOptions: {
+        mediaDevices: {
+          getUserMedia: vi.fn()
+            .mockResolvedValueOnce(createStream(track1))
+            .mockResolvedValueOnce(createStream(track2)),
+        },
+      },
+    });
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    await controller.connectProvider('session-1', 'gemini', 'fr', 2);
+    await controller.dispose('session-1', 'gemini');
+    expect(clients).toHaveLength(1);
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+    expect(track1.stop).toHaveBeenCalledOnce();
+
+    controller.prepare('session-2', 'gemini', 'fr', 0);
+    await controller.consume('session-2', 'gemini', 'stream-secret', 1);
+    await controller.connectProvider('session-2', 'gemini', 'fr', 2);
+    expect(clients).toHaveLength(2);
+    expect(clients[1].connect).toHaveBeenCalledOnce();
+    expect(clients[1].connect.mock.calls[0][0].sourceStream.getAudioTracks()[0]).toBe(track2);
+    expect(track2.stop).not.toHaveBeenCalled();
+    expect(controller.status()).toMatchObject({ active: true, status: LIVE_DUBBING_STATUS.RUNNING });
+
+    await controller.dispose('session-2', 'gemini');
+    expect(clients[1].dispose).toHaveBeenCalledOnce();
+    expect(track2.stop).toHaveBeenCalledOnce();
+  });
+
+  it('fails PREPARE on an unsupported provider audio mode, before any audio resource', async () => {
+    const track = new FakeTrack();
+    const getUserMedia = vi.fn(async () => createStream(track));
+    const create = vi.fn(() => ({ connect: vi.fn(), close: vi.fn() }));
+    const requestBootstrap = vi.fn();
+    const controller = new LiveDubbingController({
+      mediaDevices: { getUserMedia },
+      providerRegistry: { create, getAudioMode: () => 'bogus-mode' },
+      requestBootstrap,
+      notify: vi.fn(),
+    });
+
+    expect(controller.prepare('session-1', 'gemini', 'fr', 0))
+      .toMatchObject({ success: false, error: 'LIVE_DUBBING_AUDIO_MODE_UNSUPPORTED' });
+    expect(controller.currentSession).toBeNull();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(requestBootstrap).not.toHaveBeenCalled();
+    expect(track.stop).not.toHaveBeenCalled();
+
+    // Repeat PREPARE fails identically without creating anything.
+    expect(controller.prepare('session-1', 'gemini', 'fr', 0))
+      .toMatchObject({ success: false, error: 'LIVE_DUBBING_AUDIO_MODE_UNSUPPORTED' });
+    expect(controller.currentSession).toBeNull();
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('keeps the pcm path explicit end to end', async () => {
+    const track = new FakeTrack();
+    const inputPipeline = {
+      onFrame: null,
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const outputPlayer = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      clear: vi.fn(),
+      enqueuePcm16: vi.fn(() => ({ accepted: true })),
+      resetEpoch: vi.fn(),
+    };
+    const provider = {
+      connect: vi.fn(async () => providerCallbacks.onSetupComplete()),
+      sendAudio: vi.fn(() => true),
+      close: vi.fn(),
+    };
+    let providerCallbacks;
+    const accepted = vi.fn();
+    const controller = new LiveDubbingController({
+      mediaDevices: { getUserMedia: vi.fn(async () => createStream(track)) },
+      inputPipelineFactory: vi.fn(options => {
+        inputPipeline.onFrame = options.onFrame;
+        return inputPipeline;
+      }),
+      outputPlayerFactory: vi.fn(() => outputPlayer),
+      providerClientFactory: vi.fn(options => {
+        providerCallbacks = options.callbacks;
+        return provider;
+      }),
+      requestBootstrap: vi.fn().mockResolvedValue({
+        success: true,
+        providerId: 'gemini',
+        targetLanguage: 'fr',
+        bootstrap: { accessToken: 'test-token' },
+      }),
+      onPlaybackAccepted: accepted,
+      notify: vi.fn(),
+    });
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    const captured = await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    expect(controller.currentSession.audioMode).toBe(LIVE_DUBBING_AUDIO_MODES.PCM);
+    expect(captured).toMatchObject({
+      ack: 'MEDIA_ACQUIRED',
+      audioPathReady: true,
+      inputPipelineReady: true,
+      outputPipelineReady: true,
+    });
+
+    await controller.connectProvider('session-1', 'gemini', 'fr', 2);
+    expect(provider.connect).toHaveBeenCalledWith({
+      bootstrap: { accessToken: 'test-token' },
+      targetLanguage: 'fr',
+    });
+    expect(provider.connect.mock.calls[0][0]).not.toHaveProperty('sourceStream');
+
+    inputPipeline.onFrame({ buffer: new ArrayBuffer(2), sampleCount: 1, sampleRate: 16_000 });
+    expect(provider.sendAudio).toHaveBeenCalledOnce();
+    providerCallbacks.onAudio(new Uint8Array([1]));
+    expect(outputPlayer.enqueuePcm16).toHaveBeenCalledOnce();
+    expect(controller.getTelemetry()).toMatchObject({ inputSentFrames: 1, translatedAudioChunks: 1 });
+
+    // Player-driven acceptance still owns the milestone on the pcm path.
+    outputPlayer.onPlaybackAccepted({ accepted: true, sampleCount: 5 });
+    expect(controller.getTelemetry().milestones.firstTranslatedAudioAcceptedByPlayback)
+      .toEqual(expect.any(Number));
+    expect(accepted).toHaveBeenCalledWith({ accepted: true, sampleCount: 5 });
+
+    await controller.dispose('session-1', 'gemini');
+    expect(provider.close).toHaveBeenCalledOnce();
+    expect(provider.dispose).toBeUndefined();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it('rejects playback claims from a pcm provider callback', async () => {
+    const track = new FakeTrack();
+    const provider = {
+      connect: vi.fn(async () => providerCallbacks.onSetupComplete()),
+      sendAudio: vi.fn(() => true),
+      close: vi.fn(),
+    };
+    let providerCallbacks;
+    const accepted = vi.fn();
+    const controller = new LiveDubbingController({
+      mediaDevices: { getUserMedia: vi.fn(async () => createStream(track)) },
+      inputPipelineFactory: vi.fn(() => ({
+        start: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      })),
+      outputPlayerFactory: vi.fn(() => ({
+        start: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+        clear: vi.fn(),
+      })),
+      providerClientFactory: vi.fn(options => {
+        providerCallbacks = options.callbacks;
+        return provider;
+      }),
+      requestBootstrap: vi.fn().mockResolvedValue({
+        success: true,
+        providerId: 'gemini',
+        targetLanguage: 'fr',
+        bootstrap: { accessToken: 'test-token' },
+      }),
+      onPlaybackAccepted: accepted,
+      notify: vi.fn(),
+    });
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    await controller.connectProvider('session-1', 'gemini', 'fr', 2);
+
+    // The provider callback is exposed but must not claim playback on the
+    // pcm path, where the player owns the milestone.
+    providerCallbacks.onPlaybackAccepted({ accepted: true, sampleCount: 5 });
+    expect(controller.getTelemetry().milestones.firstTranslatedAudioAcceptedByPlayback).toBeNull();
+    expect(accepted).not.toHaveBeenCalled();
+
+    await controller.dispose('session-1', 'gemini');
+  });
+
+  it('routes factory exceptions to the controller error boundary', async () => {
+    const track = new FakeTrack();
+    const failure = new Error('factory boom');
+    const notify = vi.fn();
+    const controller = new LiveDubbingController({
+      mediaDevices: { getUserMedia: vi.fn(async () => createStream(track)) },
+      inputPipeline: { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) },
+      outputPlayer: { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), clear: vi.fn() },
+      providerRegistry: {
+        getAudioMode: () => LIVE_DUBBING_AUDIO_MODES.PCM,
+        create: () => { throw failure; },
+      },
+      requestBootstrap: vi.fn().mockResolvedValue({
+        success: true,
+        providerId: 'gemini',
+        targetLanguage: 'fr',
+        bootstrap: { accessToken: 'test-token' },
+      }),
+      notify,
+    });
+
+    controller.prepare('session-1', 'gemini', 'fr', 0);
+    await controller.consume('session-1', 'gemini', 'stream-secret', 1);
+    // Not masked as unavailable: the exception reaches the connect error
+    // boundary and terminalizes the session like any provider failure.
+    await expect(controller.connectProvider('session-1', 'gemini', 'fr', 2))
+      .resolves.toMatchObject({ success: false, error: 'LIVE_DUBBING_PROVIDER_ERROR' });
+    expect(controller.status()).toMatchObject({
+      status: LIVE_DUBBING_STATUS.ERROR,
+      lastError: 'LIVE_DUBBING_PROVIDER_ERROR',
+    });
+    expect(notify).toHaveBeenCalledOnce();
+    expect(JSON.stringify(notify.mock.calls)).not.toContain('factory boom');
+    expect(track.stop).toHaveBeenCalledOnce();
 
     await controller.dispose('session-1', 'gemini');
   });

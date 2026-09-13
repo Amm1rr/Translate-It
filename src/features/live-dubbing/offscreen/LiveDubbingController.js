@@ -3,6 +3,7 @@ import { LOG_COMPONENTS } from '@/shared/logging/logConstants.js';
 import {
   LIVE_DUBBING_ACTIONS,
   LIVE_DUBBING_AUDIO_LIMITS,
+  LIVE_DUBBING_AUDIO_MODES,
   LIVE_DUBBING_CAPTURE_STAGES,
   LIVE_DUBBING_INTERNAL_STATUS,
   LIVE_DUBBING_OFFSCREEN_ACKS,
@@ -14,6 +15,7 @@ import {
   createLiveDubbingCleanupDiagnostic,
   createLiveDubbingProviderDiagnostic,
   createProviderBootstrapRequest,
+  isLiveDubbingAudioMode,
   normalizeProviderTargetLanguage,
   parseProviderBootstrapResponse,
   sanitizeLiveDubbingProviderDiagnostic,
@@ -381,6 +383,22 @@ export class LiveDubbingController {
     if (!isProviderId(providerId)) return this._invalidProvider(sessionId);
 
     const session = this.currentSession;
+    // Matching PREPARE is idempotent: its session is already validated and
+    // owns the immutable audio mode. Only a new session queries the registry.
+    // The audio path is validated before any audio resource exists, so an
+    // unsupported new provider cannot reach getUserMedia or pipeline setup.
+    const audioMode = session
+      ? session.audioMode
+      : this._resolveProviderAudioMode(providerId);
+    if (!session && !isLiveDubbingAudioMode(audioMode)) {
+      return createCaptureFailure(
+        LIVE_DUBBING_CAPTURE_STAGES.OFFSCREEN_PREPARE,
+        'LIVE_DUBBING_AUDIO_MODE_UNSUPPORTED',
+        { name: 'RangeError', message: 'Unsupported provider audio mode', code: 'LIVE_DUBBING_AUDIO_MODE_UNSUPPORTED' },
+        { sessionId, providerId },
+      );
+    }
+
     if ((!session && eventSequence !== 0)
       || (session?.sessionId === sessionId && eventSequence !== session.eventSequence)) {
       return this._sequenceMismatch(sessionId, session?.sessionId === sessionId ? session : null, providerId);
@@ -490,6 +508,8 @@ export class LiveDubbingController {
         inputPipeline: null,
         outputPlayer: null,
         pipelinesReady: false,
+        audioMode,
+        audioPathReady: false,
         pendingInput: [],
         pendingInputMs: 0,
         outputEpoch: 0,
@@ -654,8 +674,18 @@ export class LiveDubbingController {
   }
 
   async _initializePipelines(session) {
+    const { audioMode } = session;
+    if (audioMode === LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM) {
+      return this._initializeMediaStreamPath(session);
+    }
+    if (audioMode !== LIVE_DUBBING_AUDIO_MODES.PCM) {
+      throw Object.assign(new Error('Live dubbing provider audio mode is unsupported'), {
+        code: 'LIVE_DUBBING_AUDIO_MODE_UNSUPPORTED',
+      });
+    }
     if (!this.pipelineRequired) {
       session.pipelinesReady = true;
+      session.audioPathReady = true;
       return;
     }
 
@@ -692,7 +722,41 @@ export class LiveDubbingController {
     }
 
     session.pipelinesReady = true;
+    session.audioPathReady = true;
     session.status = LIVE_DUBBING_STATUS.CONNECTING_PROVIDER;
+  }
+
+  /**
+   * Media-stream audio path: the retained capture MediaStream is handed to
+   * the provider, which consumes and plays audio itself. No local PCM
+   * graphs are built and no frames are queued; tracks stay
+   * Controller-owned and stop only in Controller cleanup. Ready here means
+   * the provider may connect. `inputReady`/`outputReady` stay unset: they
+   * describe local PCM graph starts, and media-stream readiness is carried
+   * by `audioPathReady` alone.
+   */
+  async _initializeMediaStreamPath(session) {
+    if (!this._isCurrentSession(session)) {
+      throw Object.assign(new Error('Live dubbing pipeline setup was cancelled'), {
+        code: 'LIVE_DUBBING_PIPELINE_SETUP_CANCELLED',
+      });
+    }
+    session.audioPathReady = true;
+    session.status = LIVE_DUBBING_STATUS.CONNECTING_PROVIDER;
+  }
+
+  /**
+   * Resolve the declared provider audio path. The mode comes only from the
+   * registry definition — never from client method presence and never from
+   * a provider id. Unknown providers and invalid modes resolve to null and
+   * fail closed at the pipeline gate.
+   */
+  _resolveProviderAudioMode(providerId) {
+    try {
+      return this.providerRegistry?.getAudioMode?.(providerId) || null;
+    } catch {
+      return null;
+    }
   }
 
   async _createInputPipeline(session) {
@@ -759,7 +823,7 @@ export class LiveDubbingController {
       return session.connectPromise;
     }
     if (session.status !== LIVE_DUBBING_STATUS.CONNECTING_PROVIDER
-      || !session.pipelinesReady
+      || !session.audioPathReady
       || eventSequence !== session.eventSequence + 1) {
       return this._sequenceMismatch(sessionId, session, providerId);
     }
@@ -810,10 +874,16 @@ export class LiveDubbingController {
 
       let setupPromise;
       try {
-        setupPromise = client.connect({
+        const connectOptions = {
           bootstrap: bootstrapWrapper.bootstrap,
           targetLanguage: bootstrapWrapper.targetLanguage,
-        });
+        };
+        if (session.audioMode === LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM) {
+          // Browser-neutral handoff: the retained capture stream, never a
+          // chrome stream id or tabCapture handle (Firefox-compatible).
+          connectOptions.sourceStream = session.stream;
+        }
+        setupPromise = client.connect(connectOptions);
       } finally {
         // The controller never stores bootstrap data; this wrapper is cleared
         // before the provider setup promise is awaited.
@@ -877,6 +947,11 @@ export class LiveDubbingController {
         details,
         providerDiagnostic,
       ),
+      onPlaybackAccepted: details => this._handleProviderPlaybackAccepted(
+        session,
+        generation,
+        details,
+      ),
     };
     let client = this.providerClient;
     if (!client && typeof this.providerClientFactory === 'function') {
@@ -937,7 +1012,7 @@ export class LiveDubbingController {
       return Promise.resolve({ success: false, error: 'LIVE_DUBBING_SESSION_UNAVAILABLE' });
     }
     if (session.status !== LIVE_DUBBING_STATUS.CONNECTING_PROVIDER
-      || !session.pipelinesReady) {
+      || !session.audioPathReady) {
       return Promise.resolve({ success: false, error: 'LIVE_DUBBING_AUDIO_PIPELINES_UNAVAILABLE' });
     }
     return this.requestProviderBootstrapForSession(session);
@@ -988,8 +1063,7 @@ export class LiveDubbingController {
       status: session?.status || IDLE_STATUS,
       eventSequence: session.eventSequence,
       captureReady: Boolean(session.stream),
-      inputPipelineReady: Boolean(session.inputPipeline && session.pipelinesReady),
-      outputPipelineReady: Boolean(session.outputPlayer && session.pipelinesReady),
+      ...this._audioReadiness(session),
       setupComplete: session.setupComplete,
       metrics: { ...session.metrics },
       ...(session.outputMetrics ? { outputMetrics: { ...session.outputMetrics } } : {}),
@@ -1111,6 +1185,20 @@ export class LiveDubbingController {
     session.inputPipeline = null;
     session.outputPlayer = null;
     session.stream = null;
+
+    // Provider resources shut down first: dispose is initiated here so
+    // close-only clients still terminate synchronously, while async
+    // provider shutdown is awaited in the chain below. Tracks stay
+    // Controller-owned — the provider never owns the capture stream —
+    // and stop synchronously right after.
+    let providerShutdown = null;
+    try {
+      providerShutdown = typeof client?.dispose === 'function'
+        ? client.dispose()
+        : client?.close?.();
+    } catch {
+      // Provider teardown is best effort; callbacks are already fenced.
+    }
     if (stream && !session.streamStopped) {
       stopTracks(stream);
       session.streamStopped = true;
@@ -1119,17 +1207,13 @@ export class LiveDubbingController {
     session.bootstrapRequested = false;
 
     try {
-      client?.close?.();
-    } catch {
-      // Socket close is best effort; callbacks are already fenced.
-    }
-    try {
       outputPlayer?.clear?.();
     } catch {
       // Queue clearing is best effort before graph teardown.
     }
 
     session.cleanupPromise = Promise.allSettled([
+      providerShutdown,
       inputPipeline?.stop?.(),
       outputPlayer?.stop?.(),
     ]).then(() => {
@@ -1218,8 +1302,7 @@ export class LiveDubbingController {
       status: session.status,
       eventSequence: session.eventSequence,
       captureReady: Boolean(session.stream),
-      inputPipelineReady: Boolean(session.inputPipeline && session.pipelinesReady),
-      outputPipelineReady: Boolean(session.outputPlayer && session.pipelinesReady),
+      ...this._audioReadiness(session),
     };
   }
 
@@ -1235,9 +1318,22 @@ export class LiveDubbingController {
       status: LIVE_DUBBING_STATUS.RUNNING,
       eventSequence: session.eventSequence,
       captureReady: Boolean(session.stream),
+      ...this._audioReadiness(session),
+      setupComplete: session.setupComplete,
+    };
+  }
+
+  /**
+   * Provider-neutral audio readiness. `audioPathReady` is the generic gate
+   * for CONNECT_PROVIDER and bootstrap; the PCM-specific flags report only
+   * real local pipelines. In media-stream mode no pipelines exist, so those
+   * flags read false while `audioPathReady` carries readiness truthfully.
+   */
+  _audioReadiness(session) {
+    return {
+      audioPathReady: session.audioPathReady === true,
       inputPipelineReady: Boolean(session.inputPipeline && session.pipelinesReady),
       outputPipelineReady: Boolean(session.outputPlayer && session.pipelinesReady),
-      setupComplete: session.setupComplete,
     };
   }
 
@@ -1266,6 +1362,9 @@ export class LiveDubbingController {
 
   _handleInputFrame(session, frame) {
     if (!this._isCurrentSession(session) || session.terminalRequested || session.disposing) return;
+    // Media-stream providers consume the retained capture stream directly;
+    // the PCM pending queue and the sendAudio path below are pcm-only.
+    if (session.audioMode === LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM) return;
     if (!session.setupComplete) {
       const byteLength = getFrameByteLength(frame);
       const durationMs = getFrameDurationMs(frame, byteLength);
@@ -1317,6 +1416,9 @@ export class LiveDubbingController {
 
   _drainPendingInput(session) {
     if (!this._isCurrentSession(session) || !session.setupComplete || !session.providerClient) return;
+    // sendAudio is a pcm-only contract, never universal: media-stream
+    // providers receive the capture stream at connect and queue nothing.
+    if (session.audioMode === LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM) return;
     while (session.pendingInput.length > 0) {
       const frame = session.pendingInput[0];
       let sent = false;
@@ -1621,6 +1723,19 @@ export class LiveDubbingController {
     } catch {
       // Playback telemetry callbacks must never affect audio or cleanup.
     }
+  }
+
+  /**
+   * Provider-managed playback acceptance. Valid only for media-stream
+   * providers that play translated audio themselves; a pcm provider must
+   * never claim playback through this callback (the player owns the
+   * milestone there). Same milestone semantics, generation-fenced like
+   * every provider callback, and free of media objects.
+   */
+  _handleProviderPlaybackAccepted(session, generation, details = {}) {
+    if (!this._isCurrentProvider(session, generation)) return;
+    if (session.audioMode !== LIVE_DUBBING_AUDIO_MODES.MEDIA_STREAM) return;
+    this._handlePlaybackAccepted(session, details);
   }
 
   _handleProviderAudio(session, generation, audioBytes) {

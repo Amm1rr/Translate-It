@@ -86,7 +86,11 @@ credential action or helper remains.
 
 The `LiveDubbingProviderRegistry` is the feature-local mapping from provider id
 to adapter. It currently contains only Gemini and returns no adapter for an
-unknown provider.
+unknown provider. Each entry declares `{ create, audioMode }` (`pcm` for
+Gemini); unknown providers and unsupported modes fail closed at PREPARE —
+before getUserMedia, pipelines, provider creation, or bootstrap. Factory
+exceptions propagate to the Controller error boundary instead of masking
+as null. See Audio Paths.
 
 ## Provider
 
@@ -113,7 +117,8 @@ Model: `models/gemini-3.5-live-translate-preview` over WebSocket.
   setup and never stores it. Background never places bootstrap data in
   descriptors. A token or connection failure ends the session: there is no
   running-session failover, reconnect, or resumption.
-- **Setup gate.** Input pipelines must be ready and the descriptor persisted at
+- **Setup gate.** The audio path must be ready (`audioPathReady` — the PCM
+  input/output pipelines for Gemini) and the descriptor persisted at
   `CONNECTING_PROVIDER` before bootstrap is issued;
   `setupComplete` from the provider is required before `RUNNING`.
 - **No pre-setup queue.** Frames arriving before setup are counted and
@@ -146,7 +151,45 @@ Model: `models/gemini-3.5-live-translate-preview` over WebSocket.
 `interactionStatus` is officially documented; both are accepted as
 metadata only and never drive session semantics.
 
-## Playback
+## Audio Paths (`pcm` | `media-stream`)
+
+Providers declare exactly one audio path in `LiveDubbingProviderRegistry`
+as `{ create, audioMode }`; Gemini declares `pcm`. Unknown providers and
+unsupported modes fail closed before any audio resource is built. The
+controller resolves the mode only through `registry.getAudioMode()` —
+never by inspecting client methods and never by provider id.
+
+- **`pcm` (Gemini).** Unchanged behavior: capture frames are pumped
+  through the local `TabAudioPipeline`/`PcmOutputPlayer` graphs and the
+  provider's `sendAudio` contract, with the pre-setup drop counting,
+  pending queue, and backpressure accounting above. The provider receives
+  `{ bootstrap, targetLanguage }` at connect and owns no media.
+- **`media-stream`.** The retained capture `MediaStream` is handed to the
+  provider, which consumes audio and manages playback itself. No local PCM
+  graphs are built, no frames are queued, and `sendAudio` is never called
+  (it is a pcm-only contract, not a universal one). The connect input is
+  `{ bootstrap, targetLanguage, sourceStream }` — the browser-neutral
+  retained stream, never a chrome stream id or tabCapture handle.
+  Provider-managed playback acceptance arrives through the generic
+  `onPlaybackAccepted` callback with the same milestone semantics as
+  player acceptance and no media objects in diagnostics or logs.
+
+Ownership split: the controller owns the capture tracks in both modes
+and stops them only in Controller cleanup; providers never own the
+capture stream. Provider shutdown (`dispose()`, falling back to the sync
+`close()`) is initiated before track stop and awaited inside the same
+cleanup transaction, fenced by the generation bump. Readiness is reported
+provider-neutrally as `audioPathReady`, which stays the `CONNECT_PROVIDER`
+and bootstrap gate; in media-stream mode the PCM-specific ready flags
+report false (no local pipelines exist) rather than following the generic
+flag. `inputReady`/`outputReady` describe local PCM graph starts only, so
+media-stream readiness is `audioPathReady` and playback is signaled solely
+by `firstTranslatedAudioAcceptedByPlayback`, which a media-stream provider
+reports through the generic `onPlaybackAccepted` callback (rejected on the
+pcm path, where the player owns it). Status, telemetry, and cleanup
+diagnostics expose scalars only — no provider, media, or stream objects.
+
+## Playback (pcm path)
 
 `PcmOutputPlayer` renders translated 24 kHz PCM16 through a dedicated
 output graph. It enforces queue safety limits (over-limit chunks are

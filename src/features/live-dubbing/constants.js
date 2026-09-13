@@ -133,3 +133,16 @@ export const LIVE_DUBBING_DESCRIPTOR_FIELDS = Object.freeze([
   'lastError',
   'eventSequence',
 ]);
+
+/**
+ * Provider audio paths. `pcm` pumps capture frames through the local
+ * TabAudioPipeline/PcmOutputPlayer graphs and the provider's sendAudio
+ * contract. `media-stream` hands the retained capture MediaStream to a
+ * provider that consumes and plays audio itself; no local PCM graphs are
+ * built. The mode is declared per provider in the registry and resolved
+ * by the controller — never inferred, never hard-coded per provider id.
+ */
+export const LIVE_DUBBING_AUDIO_MODES = Object.freeze({
+  PCM: 'pcm',
+  MEDIA_STREAM: 'media-stream',
+});

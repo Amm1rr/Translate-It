@@ -8,6 +8,7 @@ import {
   isAuthorizedOffscreenRouterSender,
   isAuthorizedOffscreenSender,
   isExactSessionResponse,
+  isLiveDubbingAudioMode,
   isTrustedLiveDubbingUiSender,
   normalizeProviderTargetLanguage,
   sanitizeLiveDubbingProviderDiagnostic,
@@ -416,5 +417,17 @@ describe('live dubbing Stage 2 contracts', () => {
     expect(LIVE_DUBBING_ACTION_TIMEOUTS.START_LIVE_DUBBING).toBe(30_000);
     expect(LIVE_DUBBING_ACTION_TIMEOUTS.STOP_LIVE_DUBBING).toBe(10_000);
     expect(LIVE_DUBBING_ACTION_TIMEOUTS.GET_LIVE_DUBBING_STATUS).toBe(5_000);
+  });
+
+  it('accepts only the declared provider audio modes', () => {
+    expect(isLiveDubbingAudioMode('pcm')).toBe(true);
+    expect(isLiveDubbingAudioMode('media-stream')).toBe(true);
+    expect(isLiveDubbingAudioMode('PCM')).toBe(false);
+    expect(isLiveDubbingAudioMode('webrtc')).toBe(false);
+    expect(isLiveDubbingAudioMode('')).toBe(false);
+    expect(isLiveDubbingAudioMode(null)).toBe(false);
+    expect(isLiveDubbingAudioMode(undefined)).toBe(false);
+    expect(isLiveDubbingAudioMode(0)).toBe(false);
+    expect(isLiveDubbingAudioMode({})).toBe(false);
   });
 });
