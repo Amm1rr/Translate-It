@@ -1,8 +1,7 @@
 # Phase D Spike: OpenAI Realtime Translation over WebRTC
 
-Status: **SPIKE_DEFERRED** (no live key available; nothing observed on a real call).
-Branch: `feat/live-dubbling`. Isolated spike only — delete the `spikes/openai/`
-tree to remove it. Do not commit (validation owner: spike author).
+Status: **SPIKE_VALIDATED** (real Chrome + real OpenAI key: translated Spanish speech heard; see §12).
+Branch: `feat/live-dubbling`. Isolated Phase D spike; keep production wiring separate until the later roadmap phases.
 
 ## 1. Goal
 
@@ -107,11 +106,12 @@ the `firstTranscriptEvent` milestone leave the handler.
 | File | Role |
 | --- | --- |
 | `src/features/live-dubbing/spikes/openai/OpenAIRealtimeBootstrapService.js` | Background-only minter; secret-only bootstrap |
-| `src/features/live-dubbing/spikes/openai/OpenAIRealtimeBootstrapService.test.js` | Mint contract tests (13) |
+| `src/features/live-dubbing/spikes/openai/OpenAIRealtimeBootstrapService.test.js` | Mint contract tests |
 | `src/features/live-dubbing/spikes/openai/OpenAIRealtimeTranslationTransport.js` | Browser-neutral WebRTC transport |
-| `src/features/live-dubbing/spikes/openai/OpenAIRealtimeTranslationTransport.test.js` | Transport tests (18) |
-| `src/features/live-dubbing/spikes/openai/manualSpike.js` | Dev-only manual runner + console hook |
-| `src/features/live-dubbing/spikes/openai/manualSpike.test.js` | Hook wiring tests (4) |
+| `src/features/live-dubbing/spikes/openai/OpenAIRealtimeTranslationTransport.test.js` | Transport tests |
+| `src/features/live-dubbing/spikes/openai/spikeDevContract.js` (+ test) | Dev-only START/STOP/STATUS contract with transaction identity |
+| `src/features/live-dubbing/spikes/openai/spikeDevBackground.js` (+ test) | Background tester hook: tab → lease → mint → stream id → START dispatch |
+| `src/features/live-dubbing/spikes/openai/spikeDevOffscreen.js` (+ test) | Offscreen internal dev listener: consume → transport → ack |
 
 ## 6. Bootstrap design
 
@@ -155,40 +155,79 @@ never stopped — the transport owns none. Late `ontrack`/`onmessage` events
 from a superseded generation are ignored. Setup failures run the same
 close path (`_abandon`) so a failed start leaks no connection.
 
-## 8. Manual / dev invocation path
+## 8. One-command validation flow (dev only)
 
-Auth boundary: minting stays in the Background dev context (the only place
-the long-lived key may be read); the Offscreen hook accepts an
-already-minted ephemeral bootstrap and can never mint. `manualSpike.js`
-imports neither the Background-only minter nor the key manager and never
-reads the long-lived key setting (asserted by test).
+The tester hook lives in Background as
+`globalThis.__translateItOpenAIRealtimeSpike`, so a fresh load works
+without a pre-existing Offscreen document. Offscreen keeps an internal
+dev listener only (no hook there).
 
-Dev-only hook of choice: `installOpenAISpikeDevHook()` installs
-`globalThis.__translateItOpenAIRealtimeSpike` (`{ start, stop, status }`).
-`start({ sourceStream, targetLanguage, bootstrap })` forwards the caller
-supplied bootstrap to the transport, which revalidates secret presence and
-language binding. Never imported by production code.
+One command in the service-worker DevTools drives the whole transaction:
 
-Precise manual steps (requires a real `OPENAI_API_KEY` with Realtime access):
+```js
+hook = globalThis.__translateItOpenAIRealtimeSpike;
+await hook.start({ targetLanguage: 'es' }); // → { success: true, targetLanguage: 'es' }
+await hook.status();                        // scalar-only telemetry
+await hook.stop();                          // idempotent teardown
+```
 
-1. Background dev context (service-worker devtools): import
-   `OpenAIRealtimeBootstrapService`, run
-   `await new OpenAIRealtimeBootstrapService().mintClientSecret('es')`,
-   and copy the returned ephemeral `{ secret, targetLanguage, model }`.
-   The long-lived key never leaves this context.
-2. Offscreen dev context: obtain a live `MediaStream` via the existing
-   capture path (start normal live dubbing to MEDIA_ACQUIRED, or
-   `getMediaStreamId` + `getUserMedia` in the offscreen console per
-   coordinator lines 451–526). Open a tab playing continuous speech first.
-3. Offscreen dev context: `hook = globalThis.__translateItOpenAIRealtimeSpike`
-   (`installOpenAISpikeDevHook()` if absent).
-4. Offscreen dev context:
-   `await hook.start({ sourceStream, targetLanguage: 'es', bootstrap })`
-   — expect `{ success: true }`.
-5. Listen to the spike audio element; run `hook.status()` for scalar
-   telemetry; `await hook.stop()` to end. The ephemeral secret is valid
-   ~10 minutes (`expires_after` 600s); re-mint in the Background context
-   for another run.
+Behind the command, in order: validate target → active tab → dev lease
+(creates the Offscreen document when absent) → Background-only mint →
+recheck transaction → `getMediaStreamId` LAST → immediately dispatch
+`START` to Offscreen → Offscreen getUserMedia consume FIRST, then the
+existing transport → audio-element playback. Nothing slow runs between
+the stream-id mint and the dispatch, because tab stream ids must be
+consumed promptly. A pre-stream-id failure releases the lease; a
+post-stream-id failure releases the lease plus owned resources.
+
+Ownership: Background owns tab/lease/key/mint/stream-id/lifecycle;
+Offscreen owns consume/tracks/transport/playback/cleanup. Every dev
+message carries the transaction identity, so stale responses can never
+affect newer runs. A malformed or missing Offscreen ack still releases
+the Background-owned lease — release uses the locally tracked identity
+and never depends on an Offscreen echo.
+
+Auth boundary: the Offscreen listener never imports `ApiKeyManager`,
+never reads `OPENAI_API_KEY`, and never instantiates the mint service
+(asserted by test over the Offscreen-side sources). Minting happens only
+in Background. Traffic uses the dev-only actions `OPENAI_SPIKE_DEV_START`
+/ `STOP` / `STATUS` on a dev-only target — namespaced to the spike,
+absent from every production router, registry, UI, and settings surface
+(the production offscreen router would synchronously answer
+`OFFSCREEN_UNAUTHORIZED` to foreign actions, so the dev target keeps the
+response race clean). Nothing sensitive is ever logged: no key, secret,
+SDP, transcript, stream id, or raw body — `LOG_COMPONENTS.LIVE_DUBBING`,
+scalar codes and scalar status only.
+
+Lifecycle: a concurrent start returns `ALREADY_STARTED`; a stop during
+lease/mint/post-stream-id abandons late work (`START_CANCELLED`); consume
+failure releases the lease; transport failure stops owned tracks and
+releases the lease; `stop()` runs Offscreen cleanup first, then the lease
+release; stop is idempotent; restart works. Only hook-owned tracks are
+ever stopped.
+
+Exposure: DEV-gated installs only — `src/core/background/index.js`
+installs the tester hook and `src/html/offscreen.js` installs the
+internal listener, both behind `__IS_DEVELOPMENT__` (shaken out of
+production builds; verified by grepping both bundles). A dev build
+(`pnpm dev:chrome`) carries them; a production build does not.
+
+Precise tester steps (requires a real `OPENAI_API_KEY` with Realtime access):
+
+1. Build and load the dev extension (`pnpm dev:chrome`, load unpacked).
+2. Open a tab playing English speech; keep it active.
+3. Click the toolbar icon once (user invocation — grants tab capture).
+4. Open the service-worker DevTools.
+5. Run `await globalThis.__translateItOpenAIRealtimeSpike.start({ targetLanguage: 'es' })`
+   — expect `{ success: true, targetLanguage: 'es' }` (safe error codes
+   only on failure; capture denial surfaces as `CAPTURE_FAILED` with no
+   raw errors).
+5. Listen to the translated playback; run
+   `await globalThis.__translateItOpenAIRealtimeSpike.status()` for scalar telemetry.
+6. Run `await globalThis.__translateItOpenAIRealtimeSpike.stop()` — expect
+   `{ success: true }`; repeat `stop()` for the idempotent shape, and
+   re-run `start()` to confirm second-start works. The ephemeral secret is
+   valid ~10 minutes (`expires_after` 600s); each `start()` re-mints.
 
 What to observe before any production decision:
 
@@ -221,33 +260,86 @@ rejection; second-start rejection with zero mutation (live session keeps
 processing transcript/track events); proxy SDP path; browser-neutral source
 assertion.
 
-Hook: caller-minted bootstrap forwarding (+ language defaulting);
-secret-less rejection without touching the transport; status/stop; hook
-installation; offscreen key/mint-dependency absence (source assertion).
+Hook (Background, one-command): lease → mint → stream-id → immediate
+START ordering; ephemeral-only dispatch shape; failure paths (no tab,
+lease without mint/release side effects, mint failure with release,
+capture denial as `CAPTURE_FAILED` without raw errors); concurrent-start
+fencing; stop-during-lease/mint/post-stream-id abandonment with
+exact-once lease release; malformed/missing-ack release without echo
+dependence; Offscreen failure passthrough; scalar status with best-effort
+telemetry merge and degradation; idempotent stop and fresh-transaction
+restart; `globalThis` install; raw key material absent from the module
+(source assertion).
+
+Offscreen (internal listener): consume-before-transport with the consumed
+stream handed over (never the id); auth/malformed/language/binding
+rejections; busy fencing; consume and transport failure cleanup with
+owned-track stops; transaction-matched STOP teardown with stale-id
+immunity during session, pending consume, and pending transport start
+(stale STOP is a true no-op; the newer run still completes); matching
+STOP during pending transport.start disposes/fences the transport;
+late-completion abandonment; STATUS scoping with sanitized telemetry;
+restart; listener install that ignores production traffic and exposes
+nothing on `globalThis`; Offscreen key/capture/hook-dependency absence
+(source assertions over all Offscreen-side modules).
+
+Contract: dev START/STOP/STATUS actions disjoint from production actions
+on a dev-only target; dispatch builders; START/STOP/STATUS and ack
+parsers with transaction matching and the shared telemetry sanitizer
+(fresh DTO of safe scalars; malicious/nested/sensitive fields dropped);
+production entries import spike code only behind `__IS_DEVELOPMENT__`,
+with the tester hook in Background and no hook in Offscreen (source
+assertion).
+
+Lease: REAL-manager regression — TTS/OCR/live-dubbing leases unchanged,
+one shared document created once with centralized reasons including
+`WEB_RTC`, spike reasons accepted, genuinely-unsupported reasons still
+rejected with no lifecycle mutation.
 
 ## 10. Validation (this spike)
 
-- `vitest … src/features/live-dubbing/spikes/openai/`: 38 passed, 0 failed.
-- Affected suites: `src/shared/runtime/OffscreenRuntimeLeaseManager.test.js`
-  and the `src/features/live-dubbing/` suite must be re-run on the submit
-  machine (see §12).
-- Targeted ESLint on spike + lease files; `git diff --check`. No Chrome
-  build (no bundling change — spike is plain modules under `src/`).
-- No live call was made: no key exists in this environment, so the verdict
-  below is by construction, not observation.
+- `vitest … src/features/live-dubbing/spikes/openai/`: 77 passed, 0 failed.
+- Affected suites (`src/features/live-dubbing/`, lease manager,
+  `src/html/offscreen.test.js`): 330 passed, 0 failed.
+- Targeted ESLint on spike + touched entry files; `git diff --check`.
+- `pnpm build:chrome` (production): succeeds; spike markers absent from the
+  bundle (DEV-gated installs shaken out). Dev vite build: tester-hook
+  installer present in the dev background bundle, `spikeDevOffscreen.js`
+  chunk emitted and dynamically referenced from the dev offscreen bundle,
+  and the hook global absent Offscreen-side.
+- Live validation (real Chrome dev build, real OpenAI key, English → Spanish):
+  `start({ targetLanguage: 'es' })` returned `{ success: true,
+  targetLanguage: 'es' }`; ephemeral client-secret bootstrap, tab capture,
+  and WebRTC offer/answer negotiation all succeeded; one remote translated
+  audio track arrived and Spanish translated speech was audibly confirmed by
+  the human tester. Running status showed `offerCreated: true`,
+  `answerApplied: true`, `transcriptEvents: 139`, `remoteTracks: 1`, with
+  `firstRemoteAudio` ≈ 1.96 s after `start` in this single run (one spike
+  observation, not a benchmark or SLA). Transcripts were observed only as
+  scalar event counts, never stored or logged as text. `stop()` returned
+  `{ success: true }` and post-Stop status showed `active: false`,
+  `captureReady: false`, `telemetry: null`.
 
 ## 11. Risks / open questions for a live run
 
-- Exact `output.language` tag format OpenAI expects (BCP-47 vs ISO-639-1).
-- `noise_reduction: null` vs omitted field server behavior.
-- Data-channel event taxonomy (which `type` values carry transcripts).
-- Offscreen-document WebRTC + autoplay policy for the playback element.
-- Whether one peer connection per language switch is required.
+Live run (English → Spanish, single session) answered part of this list:
+
+- `output.language: 'es'` was accepted — tag format works at least for
+  this pair; other languages untested.
+- Transcript events arrived (`transcriptEvents: 139`) and were counted
+  only; per-type taxonomy still unmapped.
+- Playback was audible, so offscreen autoplay did not block this run.
+- `noise_reduction: null` was sent as specified; null-vs-omitted server
+  behavior remains unknown.
+- Whether one peer connection per language switch is required remains
+  unknown (no language switch was tested).
 
 ## 12. Verdict
 
-**SPIKE_DEFERRED** — implementation and mocked contract tests are complete
-and isolated, but no real translation audio was observed (no live key in
-this environment), so feasibility is undecided. To promote: run §8 manually,
-record the six observations, then decide between a production adapter
-behind the provider registry or deletion of the spike tree.
+**SPIKE_VALIDATED** — real Chrome validation with a real OpenAI key
+succeeded: ephemeral bootstrap, tab capture, offer/answer negotiation, one
+remote translated-audio track, audibly confirmed Spanish speech, and clean
+Stop. Single-run first-audio latency was ≈ 1.96 s (observation only, not a
+benchmark or production SLA). Next decision (Phase E and beyond): a
+production adapter behind the provider registry, or deletion of the spike
+tree. Phase E/F/G roadmap boundaries are unchanged.

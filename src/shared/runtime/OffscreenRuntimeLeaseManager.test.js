@@ -90,6 +90,36 @@ describe('OffscreenRuntimeLeaseManager', () => {
     expect(manager.hasActiveLeases()).toBe(true);
   });
 
+  it('shares one document across TTS/OCR/live-dubbing/WEB_RTC leases and still rejects unknown reasons', async () => {
+    const browser = createBrowser();
+    const manager = new OffscreenRuntimeLeaseManager({ browserAPI: browser });
+
+    // Existing production leases are unchanged and share the document.
+    await expect(manager.acquire(lease('tts', 'playback', ['AUDIO_PLAYBACK']))).resolves.toBe(true);
+    await expect(manager.acquire(lease('screen-capture', 'ocr-1', ['WORKERS']))).resolves.toBe(true);
+    await expect(manager.acquire(lease('live-dubbing', 'session-1', ['USER_MEDIA', 'AUDIO_PLAYBACK'])))
+      .resolves.toBe(true);
+    // The spike capture transaction reasons are accepted by the real manager.
+    await expect(manager.acquire(lease('openai-spike-dev', 'tx-1', ['USER_MEDIA', 'AUDIO_PLAYBACK', 'WEB_RTC'])))
+      .resolves.toBe(true);
+
+    // One shared document, created once with the centralized reasons.
+    expect(browser.offscreen.createDocument).toHaveBeenCalledTimes(1);
+    expect(browser.offscreen.createDocument).toHaveBeenCalledWith({
+      url: OFFSCREEN_RUNTIME_CONFIG.url,
+      reasons: ['AUDIO_PLAYBACK', 'WORKERS', 'USER_MEDIA', 'WEB_RTC'],
+      justification: OFFSCREEN_RUNTIME_CONFIG.justification,
+    });
+    expect(manager.getSnapshot().leases).toHaveLength(4);
+
+    // Genuinely-unsupported reasons still fail closed with no lifecycle mutation.
+    await expect(manager.acquire(lease('x', 'y', ['WEB_RTC', 'BOGUS_REASON']))).rejects.toThrow(
+      'unsupported offscreen reason',
+    );
+    expect(browser.offscreen.createDocument).toHaveBeenCalledTimes(1);
+    expect(manager.getSnapshot().leases).toHaveLength(4);
+  });
+
   it('treats duplicate identity as idempotent', async () => {
     const browser = createBrowser();
     const manager = new OffscreenRuntimeLeaseManager({ browserAPI: browser });
