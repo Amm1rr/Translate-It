@@ -237,4 +237,18 @@ initializeBackgroundService(backgroundService, postInitializeBackgroundService, 
   });
 });
 
+// Phase D OpenAI spike hook (DEV ONLY): shaken out of production builds.
+// Installs `globalThis.__translateItOpenAIRealtimeSpike` (start/status/stop)
+// in the service-worker devtools. No production wiring: the hook only
+// sends dev-namespaced messages the production routers never match.
+if (typeof __IS_DEVELOPMENT__ !== 'undefined' && __IS_DEVELOPMENT__) {
+  import('@/features/live-dubbing/spikes/openai/spikeDevBackground.js').then(
+    (module) => {
+      try {
+        module.installOpenAISpikeDevBackgroundHook?.();
+      } catch { /* dev-only install is best effort */ }
+    },
+  ).catch(() => {});
+}
+
 export { backgroundService };

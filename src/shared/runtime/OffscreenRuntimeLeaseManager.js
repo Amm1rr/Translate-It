@@ -8,12 +8,13 @@ export const OFFSCREEN_DOCUMENT_REASONS = Object.freeze([
   'AUDIO_PLAYBACK',
   'WORKERS',
   'USER_MEDIA',
+  'WEB_RTC',
 ]);
 
 export const OFFSCREEN_RUNTIME_CONFIG = Object.freeze({
   url: 'src/html/offscreen.html',
   reasons: OFFSCREEN_DOCUMENT_REASONS,
-  justification: 'Shared offscreen document supports audio playback, OCR workers, and approved tab-media capture.',
+  justification: 'Shared offscreen document supports audio playback, OCR workers, approved tab-media capture, and WebRTC peer connections.',
 });
 
 export const OFFSCREEN_RUNTIME_LEASE_STORAGE_KEY = '__translateItOffscreenRuntimeLeases';

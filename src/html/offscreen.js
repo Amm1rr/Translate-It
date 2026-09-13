@@ -1128,6 +1128,19 @@ async function handleOCRProcess(data, sendResponse) {
     });
   }
 }
+// Phase D OpenAI spike listener (DEV ONLY): shaken out of production builds.
+// Internal dev listener for START/STOP/STATUS; exposes nothing on
+// globalThis. No production wiring: non-spike traffic is never matched.
+if (typeof __IS_DEVELOPMENT__ !== 'undefined' && __IS_DEVELOPMENT__) {
+  import('../features/live-dubbing/spikes/openai/spikeDevOffscreen.js').then(
+    (module) => {
+      try {
+        module.installOpenAISpikeDevOffscreenListener?.();
+      } catch { /* dev-only install is best effort */ }
+    },
+  ).catch(() => {});
+}
+
 // Cleanup resources when page unloads
 resourceTracker.addEventListener(window, 'beforeunload', () => {
   logger.debug('Offscreen document unloading, cleaning up resources...');
